@@ -118,7 +118,11 @@ export async function refreshAllUsage(
   const results: CodexUsageInfo[] = []
   for (const [idx, account] of accounts.entries()) {
     onProgress?.(idx + 1, accounts.length, account.name)
-    results.push(await fetchUsageForAccount(account.name, _restorePrevious))
+    try {
+      results.push(await fetchUsageForAccount(account.name, _restorePrevious))
+    } catch (error) {
+      addLog('warning', `刷新「${account.name}」用量失败：${error instanceof Error ? error.message : String(error)}`)
+    }
   }
   addLog('success', `已刷新 ${results.length} 个账号的用量`)
   return results

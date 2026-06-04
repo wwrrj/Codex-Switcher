@@ -12,6 +12,11 @@ import ToastContainer from '@/components/ToastContainer'
 export default function App() {
   const init = useAppStore((s) => s.init)
   const activeAccount = useAppStore((s) => s.activeAccount)
+  const accountCount = useAppStore((s) => s.accounts.length)
+  const enableUsageQuery = useAppStore((s) => s.settings.enableUsageQuery)
+  const refreshUsageIntervalMinutes = useAppStore((s) => s.settings.refreshUsageIntervalMinutes)
+  const refreshAllUsage = useAppStore((s) => s.refreshAllUsage)
+  const refreshTokenUsage = useAppStore((s) => s.refreshTokenUsage)
 
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [addOpen, setAddOpen] = useState(false)
@@ -21,6 +26,18 @@ export default function App() {
   useEffect(() => {
     init()
   }, [init])
+
+  useEffect(() => {
+    if (!enableUsageQuery || accountCount === 0) return
+
+    const intervalMs = Math.max(1, refreshUsageIntervalMinutes || 15) * 60_000
+    const timer = window.setInterval(() => {
+      void refreshAllUsage(true)
+      void refreshTokenUsage()
+    }, intervalMs)
+
+    return () => window.clearInterval(timer)
+  }, [accountCount, enableUsageQuery, refreshAllUsage, refreshTokenUsage, refreshUsageIntervalMinutes])
 
   const handleDelete = useCallback(() => {
     const active = useAppStore.getState().activeAccount

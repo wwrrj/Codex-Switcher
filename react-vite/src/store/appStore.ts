@@ -97,7 +97,7 @@ interface AppStore {
   refreshAuth: () => Promise<void>
   saveActive: () => Promise<void>
   refreshUsage: (name?: string) => Promise<void>
-  refreshAllUsage: () => Promise<void>
+  refreshAllUsage: (silent?: boolean) => Promise<void>
   updateSettings: (s: Partial<AppSettings>) => Promise<void>
   setTheme: (t: 'system' | 'light' | 'dark') => void
   addToast: (level: ToastItem['level'], message: string) => void
@@ -124,6 +124,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
     autoDetectCodexHome: true,
     refreshUsageOnStartup: true,
     refreshUsageAfterSwitch: true,
+    refreshUsageIntervalMinutes: 15,
     restorePreviousAfterUsageCheck: true,
     backupRetention: 10,
     enableUsageQuery: true,
@@ -155,6 +156,9 @@ export const useAppStore = create<AppStore>((set, get) => ({
       })
       get().applyTheme(state.settings.theme)
       void get().refreshTokenUsage()
+      if (state.settings.enableUsageQuery && state.settings.refreshUsageOnStartup && state.accounts.length > 0) {
+        void get().refreshAllUsage(true)
+      }
     } catch (e: unknown) {
       set({ loading: false })
       get().addToast('error', e instanceof Error ? e.message : '初始化失败')
@@ -177,6 +181,9 @@ export const useAppStore = create<AppStore>((set, get) => ({
         switchTarget: null,
       })
       get().addToast('success', `已切换到账号「${name}」`)
+      if (get().settings.enableUsageQuery && get().settings.refreshUsageAfterSwitch) {
+        void get().refreshUsage(name)
+      }
     } catch (e: unknown) {
       get().addToast('error', e instanceof Error ? e.message : '切换失败')
     }
@@ -190,6 +197,9 @@ export const useAppStore = create<AppStore>((set, get) => ({
       const authStatus = await api.detectCodexAuth()
       set({ accounts, authStatus, activeAccount: active, selectedAccount: active, logs: api.getLogs() })
       get().addToast('success', `已添加账号「${name}」`)
+      if (get().settings.enableUsageQuery) {
+        void get().refreshUsage(name)
+      }
     } catch (e: unknown) {
       throw e
     }
@@ -266,12 +276,14 @@ export const useAppStore = create<AppStore>((set, get) => ({
     }
   },
 
-  refreshAllUsage: async () => {
+  refreshAllUsage: async (silent = false) => {
+    if (get().isRefreshingAll || !get().settings.enableUsageQuery || get().accounts.length === 0) return
     set({ isRefreshingAll: true, refreshProgress: null })
     try {
       const usages = await api.refreshAllUsage(
         get().settings.restorePreviousAfterUsageCheck,
         (current, total, name) => {
+          if (silent) return
           set({
             refreshProgress: { current, total, currentName: name, succeeded: 0, failed: 0, done: false },
           })
@@ -293,7 +305,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
         accounts,
         logs: api.getLogs(),
         isRefreshingAll: false,
-        refreshProgress: {
+        refreshProgress: silent ? null : {
           current: accounts.length,
           total: accounts.length,
           currentName: '',
@@ -302,10 +314,10 @@ export const useAppStore = create<AppStore>((set, get) => ({
           done: true,
         },
       })
-      setTimeout(() => set({ refreshProgress: null }), 4000)
+      if (!silent) setTimeout(() => set({ refreshProgress: null }), 4000)
     } catch (e: unknown) {
       set({ isRefreshingAll: false, refreshProgress: null })
-      get().addToast('error', e instanceof Error ? e.message : '批量刷新失败')
+      if (!silent) get().addToast('error', e instanceof Error ? e.message : '批量刷新失败')
     }
   },
 

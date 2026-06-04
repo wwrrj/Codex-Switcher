@@ -208,10 +208,16 @@ pub struct AppSettings {
     pub auto_detect_codex_home: bool,
     pub refresh_usage_on_startup: bool,
     pub refresh_usage_after_switch: bool,
+    #[serde(default = "default_refresh_usage_interval_minutes")]
+    pub refresh_usage_interval_minutes: u32,
     pub restore_previous_after_usage_check: bool,
     pub backup_retention: u32,
     pub enable_usage_query: bool,
     pub theme: String,
+}
+
+fn default_refresh_usage_interval_minutes() -> u32 {
+    15
 }
 
 impl Default for AppSettings {
@@ -221,6 +227,7 @@ impl Default for AppSettings {
             auto_detect_codex_home: true,
             refresh_usage_on_startup: true,
             refresh_usage_after_switch: true,
+            refresh_usage_interval_minutes: default_refresh_usage_interval_minutes(),
             restore_previous_after_usage_check: true,
             backup_retention: 10,
             enable_usage_query: true,

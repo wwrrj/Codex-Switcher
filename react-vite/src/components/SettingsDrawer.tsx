@@ -8,6 +8,7 @@ const defaultSettings: AppSettings = {
   autoDetectCodexHome: true,
   refreshUsageOnStartup: true,
   refreshUsageAfterSwitch: true,
+  refreshUsageIntervalMinutes: 15,
   restorePreviousAfterUsageCheck: true,
   backupRetention: 10,
   enableUsageQuery: true,
@@ -87,7 +88,7 @@ export default function SettingsDrawer({ open, onClose }: Props) {
               onChange={(v) => setForm({ ...form, autoDetectCodexHome: v })}
             />
             <ToggleRow
-              label="启动时自动刷新当前账号用量"
+              label="启动时自动刷新所有账号用量"
               checked={form.refreshUsageOnStartup}
               onChange={(v) => setForm({ ...form, refreshUsageOnStartup: v })}
             />
@@ -106,6 +107,21 @@ export default function SettingsDrawer({ open, onClose }: Props) {
               checked={form.enableUsageQuery}
               onChange={(v) => setForm({ ...form, enableUsageQuery: v })}
             />
+          </FieldGroup>
+
+          {/* Usage refresh interval */}
+          <FieldGroup label="用量自动刷新间隔">
+            <div className="flex items-center gap-2">
+              <input
+                type="number"
+                min={1}
+                max={1440}
+                value={form.refreshUsageIntervalMinutes}
+                onChange={(e) => setForm({ ...form, refreshUsageIntervalMinutes: Math.max(1, parseInt(e.target.value) || 15) })}
+                className="w-20 px-2.5 py-1.5 rounded-md text-xs bg-bg border border-line text-fg focus:border-primary focus:outline-none"
+              />
+              <span className="text-xs text-fg-subtle">分钟</span>
+            </div>
           </FieldGroup>
 
           {/* Backup retention */}

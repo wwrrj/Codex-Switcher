@@ -136,6 +136,7 @@ export interface AppSettings {
   autoDetectCodexHome: boolean;
   refreshUsageOnStartup: boolean;
   refreshUsageAfterSwitch: boolean;
+  refreshUsageIntervalMinutes: number;
   restorePreviousAfterUsageCheck: boolean;
   backupRetention: number;
   enableUsageQuery: boolean;
