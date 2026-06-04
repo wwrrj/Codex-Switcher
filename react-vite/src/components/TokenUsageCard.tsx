@@ -20,12 +20,38 @@ function compactNumber(value?: number): string {
 }
 
 function recentDays(days: TokenUsageDay[], count = 14): TokenUsageDay[] {
-  return [...days].sort((a, b) => a.date.localeCompare(b.date)).slice(-count)
+  const byDate = new Map(days.map((day) => [day.date, day]))
+  const result: TokenUsageDay[] = []
+  const today = new Date()
+  today.setHours(0, 0, 0, 0)
+
+  for (let offset = count - 1; offset >= 0; offset -= 1) {
+    const date = new Date(today)
+    date.setDate(today.getDate() - offset)
+    const key = [
+      date.getFullYear(),
+      String(date.getMonth() + 1).padStart(2, '0'),
+      String(date.getDate()).padStart(2, '0'),
+    ].join('-')
+    result.push(byDate.get(key) ?? {
+      date: key,
+      turns: 0,
+      usage: {
+        inputTokens: 0,
+        cachedInputTokens: 0,
+        outputTokens: 0,
+        reasoningOutputTokens: 0,
+        totalTokens: 0,
+      },
+    })
+  }
+
+  return result
 }
 
 function barLevel(day: TokenUsageDay, max: number): number {
   if (max <= 0 || day.usage.totalTokens <= 0) return 0
-  return Math.max(8, Math.round((day.usage.totalTokens / max) * 100))
+  return Math.max(3, (day.usage.totalTokens / max) * 100)
 }
 
 function localDateKey(): string {
@@ -70,24 +96,31 @@ export default function TokenUsageCard({ summary, onRefresh, isRefreshing }: Pro
       <div className="mt-4 rounded-lg border border-line-subtle bg-bg-elevated/50 p-3">
         <div className="flex items-center justify-between mb-2">
           <span className="text-[11px] text-fg-subtle">近 14 天 token</span>
-          <span className="text-[10px] text-fg-subtle">
-            {summary ? `统计至 ${formatDate(summary.fetchedAt)}` : '尚未统计'}
-          </span>
+          <div className="text-right text-[10px] text-fg-subtle">
+            <span>最高 {compactNumber(maxDayTokens)}</span>
+            <span className="mx-1">·</span>
+            <span>{summary ? `统计至 ${formatDate(summary.fetchedAt)}` : '尚未统计'}</span>
+          </div>
         </div>
-        <div className="flex items-end gap-1.5 h-16">
+        <div className="flex gap-1.5">
           {days.length === 0 ? (
             <div className="flex-1 text-center text-xs text-fg-subtle">暂无 token 记录</div>
           ) : (
             days.map((day) => (
               <div key={day.date} className="flex-1 flex flex-col items-center gap-1 min-w-0">
-                <div
-                  title={`${day.date}: ${formatNumber(day.usage.totalTokens)} tokens, ${day.turns} turns`}
-                  className={cn(
-                    'w-full rounded-t-sm bg-primary/70 border border-primary/30 min-h-[4px]',
-                    day.usage.totalTokens === maxDayTokens && 'bg-primary'
-                  )}
-                  style={{ height: `${barLevel(day, maxDayTokens)}%` }}
-                />
+                <div className="w-full h-16 flex items-end">
+                  <div
+                    title={`${day.date}: ${formatNumber(day.usage.totalTokens)} tokens, ${day.turns} turns`}
+                    className={cn(
+                      'w-full rounded-t-sm border transition-[height] duration-300',
+                      day.usage.totalTokens > 0
+                        ? 'bg-primary/70 border-primary/30'
+                        : 'bg-bg-hover/50 border-line-subtle',
+                      day.usage.totalTokens === maxDayTokens && maxDayTokens > 0 && 'bg-primary'
+                    )}
+                    style={{ height: `${barLevel(day, maxDayTokens)}%` }}
+                  />
+                </div>
                 <span className="text-[9px] text-fg-subtle tabular-nums">
                   {day.date.slice(5).replace('-', '/')}
                 </span>
