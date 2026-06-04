@@ -1,33 +1,26 @@
-import { RefreshCw, ArrowRightLeft, Pencil, Trash2, ExternalLink, AlertTriangle, Key, CheckCircle2, Calendar, Clock, Users, Activity, Settings, Star, Plus } from 'lucide-react'
+import { RefreshCw, ArrowRightLeft, Pencil, Trash2, ExternalLink, AlertTriangle, Key, CheckCircle2, Calendar, Clock, Users, Activity, Star, Plus } from 'lucide-react'
 import { useAppStore } from '@/store/appStore'
 import UsageWindowCard from './UsageWindowCard'
 import RefreshAllProgress from './RefreshAllProgress'
 import SubscriptionBadge from './SubscriptionBadge'
 import AccountPool from './AccountPool'
-import UsageHeatmap from './UsageHeatmap'
-import TokenUsageCard from './TokenUsageCard'
 import { cn, formatDate, shortName } from '@/lib/utils'
 
 interface Props {
   onRename?: () => void
   onDelete?: () => void
   onAddAccount?: () => void
-  onOpenSettings?: () => void
 }
 
-export default function MainArea({ onRename, onDelete, onAddAccount, onOpenSettings }: Props) {
+export default function MainArea({ onRename, onDelete, onAddAccount }: Props) {
   const activeAccount = useAppStore((s) => s.activeAccount)
   const accounts = useAppStore((s) => s.accounts)
   const isRefreshingAuth = useAppStore((s) => s.isRefreshingAuth)
   const isRefreshingAll = useAppStore((s) => s.isRefreshingAll)
   const refreshingUsageAccount = useAppStore((s) => s.refreshingUsageAccount)
-  const isRefreshingTokenUsage = useAppStore((s) => s.isRefreshingTokenUsage)
   const switchingAccount = useAppStore((s) => s.switchingAccount)
-  const usageHistory = useAppStore((s) => s.usageHistory)
-  const tokenUsage = useAppStore((s) => s.tokenUsage)
   const refreshUsage = useAppStore((s) => s.refreshUsage)
   const refreshAllUsage = useAppStore((s) => s.refreshAllUsage)
-  const refreshTokenUsage = useAppStore((s) => s.refreshTokenUsage)
   const switchToAccount = useAppStore((s) => s.switchToAccount)
   const openSubDialog = useAppStore((s) => s.openSubscriptionOverrideDialog)
   const refreshAuth = useAppStore((s) => s.refreshAuth)
@@ -82,8 +75,13 @@ export default function MainArea({ onRename, onDelete, onAddAccount, onOpenSetti
         </div>
       ) : (
         <>
-        {/* ── Toolbar: Refresh + Settings ── */}
-        <div className="flex items-center justify-end gap-1">
+        {/* ── Page header ── */}
+        <div className="flex items-start justify-between gap-4 pb-2">
+          <div>
+            <p className="text-[10px] uppercase tracking-[0.18em] text-primary font-medium">Accounts</p>
+            <h1 className="text-2xl font-semibold text-fg font-serif mt-1">账号管理</h1>
+            <p className="text-xs text-fg-subtle mt-1">管理 Codex 登录账号、切换状态与订阅用量。</p>
+          </div>
           <button
             onClick={refreshAuth}
             disabled={isRefreshingAuth}
@@ -92,14 +90,6 @@ export default function MainArea({ onRename, onDelete, onAddAccount, onOpenSetti
           >
             <RefreshCw className={cn('w-3.5 h-3.5', isRefreshingAuth && 'animate-spin')} />
             {isRefreshingAuth ? '刷新中' : '刷新状态'}
-          </button>
-          <button
-            onClick={onOpenSettings}
-            title="设置"
-            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-[11px] font-medium text-fg-muted hover:text-fg hover:bg-bg-hover transition-colors"
-          >
-            <Settings className="w-3.5 h-3.5" />
-            设置
           </button>
         </div>
 
@@ -277,10 +267,6 @@ export default function MainArea({ onRename, onDelete, onAddAccount, onOpenSetti
             )}
           </div>
         </div>
-
-        <UsageHeatmap history={usageHistory} tokenDays={tokenUsage?.days ?? []} />
-
-        <TokenUsageCard summary={tokenUsage} onRefresh={refreshTokenUsage} isRefreshing={isRefreshingTokenUsage} />
 
         {/* ── Quick actions ── */}
         <div className="flex items-center gap-2 pt-1">

@@ -1,7 +1,9 @@
 import { useEffect, useState, useCallback } from 'react'
 import { useAppStore } from '@/store/appStore'
 import TopBar from '@/components/TopBar'
+import AppSidebar, { type AppPage } from '@/components/AppSidebar'
 import MainArea from '@/components/MainArea'
+import UsageAnalyticsPage from '@/components/UsageAnalyticsPage'
 import SettingsDrawer from '@/components/SettingsDrawer'
 import AddAccountDialog from '@/components/AddAccountDialog'
 import DeleteAccountDialog from '@/components/DeleteAccountDialog'
@@ -19,6 +21,8 @@ export default function App() {
   const refreshTokenUsage = useAppStore((s) => s.refreshTokenUsage)
 
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
+  const [page, setPage] = useState<AppPage>('accounts')
   const [addOpen, setAddOpen] = useState(false)
   const [renameOpen, setRenameOpen] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState<{ name: string; isActive: boolean } | null>(null)
@@ -66,14 +70,28 @@ export default function App() {
       className="h-screen flex flex-col bg-bg text-fg overflow-hidden"
       style={{ minWidth: 800, minHeight: 600 }}
     >
-      <TopBar />
-
-      <MainArea
-        onRename={() => setRenameOpen(true)}
-        onDelete={handleDelete}
-        onAddAccount={() => setAddOpen(true)}
-        onOpenSettings={() => setSettingsOpen(true)}
+      <TopBar
+        sidebarCollapsed={sidebarCollapsed}
+        onToggleSidebar={() => setSidebarCollapsed((value) => !value)}
       />
+
+      <div className="flex flex-1 min-h-0">
+        <AppSidebar
+          collapsed={sidebarCollapsed}
+          page={page}
+          onPageChange={setPage}
+          onOpenSettings={() => setSettingsOpen(true)}
+        />
+        {page === 'accounts' ? (
+          <MainArea
+            onRename={() => setRenameOpen(true)}
+            onDelete={handleDelete}
+            onAddAccount={() => setAddOpen(true)}
+          />
+        ) : (
+          <UsageAnalyticsPage />
+        )}
+      </div>
 
       {/* Dialogs */}
       <SettingsDrawer open={settingsOpen} onClose={() => setSettingsOpen(false)} />
