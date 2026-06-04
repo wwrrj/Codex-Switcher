@@ -18,7 +18,10 @@ interface Props {
 export default function MainArea({ onRename, onDelete, onAddAccount, onOpenSettings }: Props) {
   const activeAccount = useAppStore((s) => s.activeAccount)
   const accounts = useAppStore((s) => s.accounts)
+  const isRefreshingAuth = useAppStore((s) => s.isRefreshingAuth)
   const isRefreshingAll = useAppStore((s) => s.isRefreshingAll)
+  const refreshingUsageAccount = useAppStore((s) => s.refreshingUsageAccount)
+  const isRefreshingTokenUsage = useAppStore((s) => s.isRefreshingTokenUsage)
   const usageHistory = useAppStore((s) => s.usageHistory)
   const tokenUsage = useAppStore((s) => s.tokenUsage)
   const refreshUsage = useAppStore((s) => s.refreshUsage)
@@ -37,6 +40,7 @@ export default function MainArea({ onRename, onDelete, onAddAccount, onOpenSetti
   const isApiKey = account?.subscription?.plan === 'api_key'
   const windows5h = usage?.windows.find((w) => w.window === '5h') ?? null
   const windows7d = usage?.windows.find((w) => w.window === '7d') ?? null
+  const isRefreshingCurrent = refreshingUsageAccount === account?.name
 
   // Pool-level stats
   const totalAccounts = accounts.length
@@ -81,11 +85,12 @@ export default function MainArea({ onRename, onDelete, onAddAccount, onOpenSetti
         <div className="flex items-center justify-end gap-1">
           <button
             onClick={refreshAuth}
+            disabled={isRefreshingAuth}
             title="刷新状态"
             className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-[11px] font-medium text-fg-muted hover:text-fg hover:bg-bg-hover transition-colors"
           >
-            <RefreshCw className="w-3.5 h-3.5" />
-            刷新状态
+            <RefreshCw className={cn('w-3.5 h-3.5', isRefreshingAuth && 'animate-spin')} />
+            {isRefreshingAuth ? '刷新中' : '刷新状态'}
           </button>
           <button
             onClick={onOpenSettings}
@@ -205,11 +210,11 @@ export default function MainArea({ onRename, onDelete, onAddAccount, onOpenSetti
               <h2 className="text-sm font-semibold text-fg font-serif">用量详情</h2>
               <button
                 onClick={() => refreshUsage(account.name)}
-                disabled={isRefreshingAll}
+                disabled={isRefreshingAll || isRefreshingCurrent}
                 className="flex items-center gap-1 text-[11px] text-primary hover:text-primary-hover transition-colors disabled:opacity-50"
               >
-                <RefreshCw className={cn('w-3 h-3', isRefreshingAll && 'animate-spin')} />
-                刷新当前
+                <RefreshCw className={cn('w-3 h-3', isRefreshingCurrent && 'animate-spin')} />
+                {isRefreshingCurrent ? '刷新中' : '刷新当前'}
               </button>
             </div>
 
@@ -256,10 +261,11 @@ export default function MainArea({ onRename, onDelete, onAddAccount, onOpenSetti
                 <p className="text-sm text-fg-muted mb-3">还没有查询用量</p>
                 <button
                   onClick={() => refreshUsage(account.name)}
+                  disabled={isRefreshingCurrent}
                   className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium text-primary bg-primary-muted hover:bg-primary/15 transition-colors"
                 >
-                  <RefreshCw className="w-3 h-3" />
-                  立即查询
+                  <RefreshCw className={cn('w-3 h-3', isRefreshingCurrent && 'animate-spin')} />
+                  {isRefreshingCurrent ? '查询中' : '立即查询'}
                 </button>
               </div>
             ) : (
@@ -271,9 +277,9 @@ export default function MainArea({ onRename, onDelete, onAddAccount, onOpenSetti
           </div>
         </div>
 
-        <UsageHeatmap history={usageHistory} />
+        <UsageHeatmap history={usageHistory} tokenDays={tokenUsage?.days ?? []} />
 
-        <TokenUsageCard summary={tokenUsage} onRefresh={refreshTokenUsage} />
+        <TokenUsageCard summary={tokenUsage} onRefresh={refreshTokenUsage} isRefreshing={isRefreshingTokenUsage} />
 
         {/* ── Quick actions ── */}
         <div className="flex items-center gap-2 pt-1">

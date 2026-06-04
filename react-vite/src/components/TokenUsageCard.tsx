@@ -5,6 +5,7 @@ import { cn, formatDate } from '@/lib/utils'
 interface Props {
   summary: TokenUsageSummary | null
   onRefresh: () => void
+  isRefreshing: boolean
 }
 
 function formatNumber(value?: number): string {
@@ -27,9 +28,18 @@ function barLevel(day: TokenUsageDay, max: number): number {
   return Math.max(8, Math.round((day.usage.totalTokens / max) * 100))
 }
 
-export default function TokenUsageCard({ summary, onRefresh }: Props) {
+function localDateKey(): string {
+  const date = new Date()
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
+export default function TokenUsageCard({ summary, onRefresh, isRefreshing }: Props) {
   const days = recentDays(summary?.days ?? [])
   const maxDayTokens = days.reduce((max, day) => Math.max(max, day.usage.totalTokens), 0)
+  const todayUsage = summary?.days.find((day) => day.date === localDateKey())?.usage ?? summary?.today
 
   return (
     <section data-component="TokenUsageCard" className="rounded-xl border border-line bg-bg-surface card-ring p-4">
@@ -42,16 +52,17 @@ export default function TokenUsageCard({ summary, onRefresh }: Props) {
         </div>
         <button
           onClick={onRefresh}
+          disabled={isRefreshing}
           className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-[11px] font-medium text-primary bg-primary-muted hover:bg-primary/15 transition-colors"
         >
-          <RefreshCw className="w-3 h-3" />
-          重新统计
+          <RefreshCw className={cn('w-3 h-3', isRefreshing && 'animate-spin')} />
+          {isRefreshing ? '统计中' : '重新统计'}
         </button>
       </div>
 
       <div className="grid grid-cols-4 gap-3 mt-4">
         <TokenStat icon={<Hash className="w-3.5 h-3.5" />} label="总 Token" value={compactNumber(summary?.total.totalTokens)} hint={formatNumber(summary?.total.totalTokens)} />
-        <TokenStat icon={<Activity className="w-3.5 h-3.5" />} label="今日 Token" value={compactNumber(summary?.today.totalTokens)} hint={`${formatNumber(summary?.today.totalTokens)} tokens`} />
+        <TokenStat icon={<Activity className="w-3.5 h-3.5" />} label="今日 Token" value={compactNumber(todayUsage?.totalTokens)} hint={`${formatNumber(todayUsage?.totalTokens)} tokens`} />
         <TokenStat icon={<Database className="w-3.5 h-3.5" />} label="会话文件" value={formatNumber(summary?.sessionsScanned)} hint={`${formatNumber(summary?.tokenEvents)} 次事件`} />
         <TokenStat icon={<Hash className="w-3.5 h-3.5" />} label="推理输出" value={compactNumber(summary?.total.reasoningOutputTokens)} hint={`${formatNumber(summary?.total.reasoningOutputTokens)} tokens`} />
       </div>

@@ -80,7 +80,10 @@ interface AppStore {
   settings: AppSettings
   theme: 'system' | 'light' | 'dark'
   loading: boolean
+  isRefreshingAuth: boolean
   isRefreshingAll: boolean
+  refreshingUsageAccount: string | null
+  isRefreshingTokenUsage: boolean
   refreshProgress: RefreshProgress | null
   toasts: ToastItem[]
   switchTarget: string | null
@@ -132,7 +135,10 @@ export const useAppStore = create<AppStore>((set, get) => ({
   },
   theme: 'dark',
   loading: true,
+  isRefreshingAuth: false,
   isRefreshingAll: false,
+  refreshingUsageAccount: null,
+  isRefreshingTokenUsage: false,
   refreshProgress: null,
   toasts: [],
   switchTarget: null,
@@ -239,11 +245,15 @@ export const useAppStore = create<AppStore>((set, get) => ({
   },
 
   refreshAuth: async () => {
+    if (get().isRefreshingAuth) return
+    set({ isRefreshingAuth: true })
     try {
       const authStatus = await api.detectCodexAuth()
       set({ authStatus, logs: api.getLogs() })
     } catch (e: unknown) {
       get().addToast('error', e instanceof Error ? e.message : '检测失败')
+    } finally {
+      set({ isRefreshingAuth: false })
     }
   },
 
@@ -258,9 +268,10 @@ export const useAppStore = create<AppStore>((set, get) => ({
   },
 
   refreshUsage: async (name) => {
+    const target = name ?? get().activeAccount
+    if (!target || get().refreshingUsageAccount === target) return
+    set({ refreshingUsageAccount: target })
     try {
-      const target = name ?? get().activeAccount
-      if (!target) return
       const usage = name
         ? await api.fetchUsageForAccount(name, get().settings.restorePreviousAfterUsageCheck)
         : await api.fetchUsageForActiveAccount()
@@ -273,6 +284,8 @@ export const useAppStore = create<AppStore>((set, get) => ({
       set({ accounts, logs: api.getLogs() })
     } catch (e: unknown) {
       get().addToast('error', e instanceof Error ? e.message : '查询失败')
+    } finally {
+      set({ refreshingUsageAccount: null })
     }
   },
 
@@ -400,11 +413,15 @@ export const useAppStore = create<AppStore>((set, get) => ({
   },
 
   refreshTokenUsage: async () => {
+    if (get().isRefreshingTokenUsage) return
+    set({ isRefreshingTokenUsage: true })
     try {
       const tokenUsage = await api.getTokenUsageSummary()
       set({ tokenUsage, logs: api.getLogs() })
     } catch (e: unknown) {
       get().addToast('error', e instanceof Error ? e.message : 'Token 统计失败')
+    } finally {
+      set({ isRefreshingTokenUsage: false })
     }
   },
 

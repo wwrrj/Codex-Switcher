@@ -576,7 +576,7 @@ fn max_token_usage(target: &mut TokenUsageBreakdown, usage: &TokenUsageBreakdown
 fn date_key_from_timestamp(timestamp: Option<&str>, path: &Path) -> Option<String> {
     if let Some(raw) = timestamp {
         if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(raw) {
-            return Some(dt.date_naive().to_string());
+            return Some(dt.with_timezone(&Local).date_naive().to_string());
         }
         for fmt in ["%Y/%m/%d %H:%M:%S", "%Y-%m-%d %H:%M:%S"] {
             if let Ok(dt) = chrono::NaiveDateTime::parse_from_str(raw, fmt) {
