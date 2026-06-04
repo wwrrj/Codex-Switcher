@@ -1,0 +1,26 @@
+# Dependencies
+node_modules/
+**/node_modules/
+
+# Build outputs
+dist/
+**/dist/
+target/
+**/target/
+react-vite/src-tauri/gen/schemas/
+
+# Generated installers and binaries
+*.msi
+*.exe
+*.pdb
+*.wixobj
+*.wixpdb
+
+# TypeScript incremental output
+*.tsbuildinfo
+
+# Local/editor artifacts
+.DS_Store
+Thumbs.db
+.canvas-meta.json
+nul

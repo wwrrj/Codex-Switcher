@@ -1,0 +1,141 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ── Seed tokens — Claude warm palette ── */
+:root {
+  --seed-bg: 47 3% 8%;
+  --seed-fg: 45 29% 97%;
+  --seed-primary: 16 53% 52%;
+  --seed-accent: 28 40% 48%;
+  --seed-surface: 44 3% 15%;
+  --seed-radius: 10;
+  --base-font-size: 14px;
+}
+
+/* ── Dark theme (default) — derived from seed tokens ── */
+.dark {
+  --bg: var(--seed-bg);
+  --bg-surface: var(--seed-surface);
+  --bg-elevated: 44 3% 19%;
+  --bg-hover: 44 3% 24%;
+  --fg: var(--seed-fg);
+  --fg-muted: 45 3% 62%;
+  --fg-subtle: 45 3% 40%;
+  --line: 43 3% 23%;
+  --line-subtle: 43 3% 18%;
+  --primary: var(--seed-primary);
+  --primary-hover: 16 55% 42%;
+  --primary-subtle: var(--seed-primary) / 0.12;
+  --primary-muted: 16 35% 45% / 0.15;
+  --success: 130 45% 33%;
+  --success-muted: 130 30% 30% / 0.15;
+  --warning: 36 67% 37%;
+  --warning-muted: 36 40% 35% / 0.15;
+  --danger: 8 58% 49%;
+  --danger-hover: 8 58% 40%;
+  --danger-muted: 8 40% 42% / 0.15;
+  --accent: var(--seed-accent);
+  --accent-muted: 28 30% 42% / 0.15;
+  --radius-sm: calc(var(--seed-radius) * 0.625 * 1px);
+  --radius-md: calc(var(--seed-radius) * 1px);
+  --radius-lg: calc(var(--seed-radius) * 1.5 * 1px);
+  --ring-color: 45 29% 97% / 0.06;
+  color-scheme: dark;
+}
+
+/* ── Light theme — derived from seed tokens ── */
+.light {
+  --bg: 47 28% 94%;
+  --bg-surface: 47 33% 97%;
+  --bg-elevated: 47 20% 99%;
+  --bg-hover: 47 18% 91%;
+  --fg: 47 3% 8%;
+  --fg-muted: 45 3% 36%;
+  --fg-subtle: 40 3% 51%;
+  --line: 40 13% 89%;
+  --line-subtle: 40 10% 93%;
+  --primary: var(--seed-primary);
+  --primary-hover: 16 55% 42%;
+  --primary-subtle: var(--seed-primary) / 0.08;
+  --primary-muted: 16 35% 50% / 0.10;
+  --success: 130 45% 28%;
+  --success-muted: 130 30% 30% / 0.10;
+  --warning: 36 67% 32%;
+  --warning-muted: 36 40% 35% / 0.10;
+  --danger: 8 58% 44%;
+  --danger-hover: 8 58% 36%;
+  --danger-muted: 8 40% 42% / 0.10;
+  --accent: var(--seed-accent);
+  --accent-muted: 28 30% 45% / 0.10;
+  --radius-sm: calc(var(--seed-radius) * 0.625 * 1px);
+  --radius-md: calc(var(--seed-radius) * 1px);
+  --radius-lg: calc(var(--seed-radius) * 1.5 * 1px);
+  --ring-color: 47 3% 8% / 0.06;
+  color-scheme: light;
+}
+
+/* ── Base reset ── */
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html, body, #root {
+  height: 100%;
+  overflow: hidden;
+}
+
+body {
+  font-size: var(--base-font-size, 14px);
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* ── Scrollbar ── */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: hsl(var(--line));
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: hsl(var(--fg-subtle));
+}
+
+/* ── Transitions ── */
+@layer base {
+  *, *::before, *::after {
+    transition-property: background-color, border-color, color, opacity;
+    transition-duration: 120ms;
+    transition-timing-function: ease-out;
+  }
+}
+
+/* ── Focus ring ── */
+@layer utilities {
+  .focus-ring {
+    outline: none;
+    box-shadow: 0 0 0 2px hsl(var(--primary) / 0.3);
+  }
+  .card-ring {
+    box-shadow: 0 0 0 1px hsl(var(--ring-color, 0 0% 50% / 0.06));
+  }
+}
+
+/* ── Progress bar animation ── */
+@keyframes progress-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.7; }
+}
+
+.progress-pulse {
+  animation: progress-pulse 2s ease-in-out infinite;
+}
