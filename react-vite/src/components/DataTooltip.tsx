@@ -29,14 +29,13 @@ function tooltipPosition(event: MouseEvent): Position {
 export default function DataTooltip({ children, content, className }: Props) {
   const [position, setPosition] = useState<Position | null>(null)
 
-  const handleMove = (event: MouseEvent) => setPosition(tooltipPosition(event))
+  const handleEnter = (event: MouseEvent) => setPosition(tooltipPosition(event))
 
   return (
     <>
       <div
         className={cn('cursor-default', className)}
-        onMouseEnter={handleMove}
-        onMouseMove={handleMove}
+        onMouseEnter={handleEnter}
         onMouseLeave={() => setPosition(null)}
       >
         {children}
@@ -44,7 +43,7 @@ export default function DataTooltip({ children, content, className }: Props) {
       {position && createPortal(
         <div
           data-component="DataTooltip"
-          className="fixed z-[100] pointer-events-none w-[240px] rounded-lg border border-line bg-bg-surface/95 backdrop-blur-md card-ring px-3 py-2.5 shadow-xl"
+          className="fixed z-[100] pointer-events-none w-[240px] rounded-lg border border-line bg-bg-surface card-ring px-3 py-2.5 shadow-lg"
           style={{ left: position.x, top: position.y }}
         >
           {content}

@@ -110,15 +110,6 @@ body {
   background: hsl(var(--fg-subtle));
 }
 
-/* ── Transitions ── */
-@layer base {
-  *, *::before, *::after {
-    transition-property: background-color, border-color, color, opacity;
-    transition-duration: 120ms;
-    transition-timing-function: ease-out;
-  }
-}
-
 /* ── Focus ring ── */
 @layer utilities {
   .focus-ring {
