@@ -112,8 +112,8 @@ export default function UsageHeatmap({ history, tokenDays }: Props) {
         </div>
       </div>
 
-      <div className="overflow-x-auto pb-1">
-        <div className="flex gap-1 min-w-max">
+      <div className="overflow-x-auto -mx-2 px-2 py-2">
+        <div className="flex gap-1 min-w-max px-0.5">
           {columns.map((week, weekIndex) => (
             <div key={weekIndex} className="grid grid-rows-7 gap-1">
               {week.map((day) => {
@@ -133,7 +133,7 @@ export default function UsageHeatmap({ history, tokenDays }: Props) {
                   >
                     <div
                       style={cellStyle(level)}
-                      className="w-3 h-3 rounded-[3px] border transition-transform hover:scale-125 hover:ring-2 hover:ring-primary/30"
+                      className="w-3 h-3 rounded-[3px] border transition-[transform,box-shadow] hover:scale-110 hover:shadow-[inset_0_0_0_1px_hsl(var(--fg)/0.8),0_0_0_2px_hsl(var(--primary)/0.35)]"
                     />
                   </DataTooltip>
                 )
