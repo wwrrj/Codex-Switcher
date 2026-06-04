@@ -1,4 +1,5 @@
 import type { DailyUsageEntry, TokenUsageDay } from '@/lib/types'
+import DataTooltip from './DataTooltip'
 
 interface Props {
   history: DailyUsageEntry[]
@@ -8,7 +9,8 @@ interface Props {
 interface HeatmapEntry {
   date: string
   value: number
-  title: string
+  detail: string
+  secondary: string
 }
 
 interface HeatmapDay {
@@ -32,14 +34,16 @@ function buildEntries(history: DailyUsageEntry[], tokenDays: TokenUsageDay[]): H
     return tokenDays.map((day) => ({
       date: day.date,
       value: day.usage.totalTokens,
-      title: `${day.date}: ${formatNumber(day.usage.totalTokens)} tokens，${day.turns} 次`,
+      detail: `${formatNumber(day.usage.totalTokens)} tokens`,
+      secondary: `${day.turns} 次 token 事件`,
     }))
   }
 
   return history.map((entry) => ({
     date: entry.date,
     value: entry.total,
-    title: `${entry.date}: 用量指数 ${Math.round(entry.total)}，${entry.samples} 个账号`,
+    detail: `用量指数 ${Math.round(entry.total)}`,
+    secondary: `${entry.samples} 个账号`,
   }))
 }
 
@@ -115,12 +119,23 @@ export default function UsageHeatmap({ history, tokenDays }: Props) {
               {week.map((day) => {
                 const level = levelForValue(day.entry?.value ?? 0, maxTotal)
                 return (
-                  <div
+                  <DataTooltip
                     key={day.date}
-                    title={day.entry?.title ?? `${day.date}: 无记录`}
-                    style={cellStyle(level)}
-                    className="w-3 h-3 rounded-[3px] border transition-transform hover:scale-125 hover:ring-2 hover:ring-primary/30"
-                  />
+                    className="w-3 h-3"
+                    content={
+                      <HeatmapTooltip
+                        date={day.date}
+                        detail={day.entry?.detail ?? '无使用记录'}
+                        secondary={day.entry?.secondary ?? '当天尚未记录数据'}
+                        level={level}
+                      />
+                    }
+                  >
+                    <div
+                      style={cellStyle(level)}
+                      className="w-3 h-3 rounded-[3px] border transition-transform hover:scale-125 hover:ring-2 hover:ring-primary/30"
+                    />
+                  </DataTooltip>
                 )
               })}
             </div>
@@ -139,5 +154,28 @@ export default function UsageHeatmap({ history, tokenDays }: Props) {
         </div>
       </div>
     </section>
+  )
+}
+
+function HeatmapTooltip({ date, detail, secondary, level }: {
+  date: string
+  detail: string
+  secondary: string
+  level: number
+}) {
+  return (
+    <div>
+      <div className="flex items-center justify-between gap-3">
+        <span className="text-[11px] font-medium text-fg">{date}</span>
+        <span
+          className="w-2.5 h-2.5 rounded-[3px] border shrink-0"
+          style={cellStyle(level)}
+        />
+      </div>
+      <div className="mt-2 pt-2 border-t border-line-subtle">
+        <p className="text-sm font-semibold text-primary font-serif tabular-nums">{detail}</p>
+        <p className="text-[10px] text-fg-subtle mt-0.5">{secondary}</p>
+      </div>
+    </div>
   )
 }

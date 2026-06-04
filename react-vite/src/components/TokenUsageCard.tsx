@@ -1,6 +1,7 @@
 import { Activity, Database, Hash, RefreshCw } from 'lucide-react'
 import type { TokenUsageDay, TokenUsageSummary } from '@/lib/types'
 import { cn, formatDate } from '@/lib/utils'
+import DataTooltip from './DataTooltip'
 
 interface Props {
   summary: TokenUsageSummary | null
@@ -108,9 +109,11 @@ export default function TokenUsageCard({ summary, onRefresh, isRefreshing }: Pro
           ) : (
             days.map((day) => (
               <div key={day.date} className="flex-1 flex flex-col items-center gap-1 min-w-0">
-                <div className="w-full h-16 flex items-end">
+                <DataTooltip
+                  className="w-full h-16 flex items-end"
+                  content={<TokenDayTooltip day={day} maxDayTokens={maxDayTokens} />}
+                >
                   <div
-                    title={`${day.date}: ${formatNumber(day.usage.totalTokens)} tokens, ${day.turns} turns`}
                     className={cn(
                       'w-full rounded-t-sm border transition-[height] duration-300',
                       day.usage.totalTokens > 0
@@ -120,7 +123,7 @@ export default function TokenUsageCard({ summary, onRefresh, isRefreshing }: Pro
                     )}
                     style={{ height: `${barLevel(day, maxDayTokens)}%` }}
                   />
-                </div>
+                </DataTooltip>
                 <span className="text-[9px] text-fg-subtle tabular-nums">
                   {day.date.slice(5).replace('-', '/')}
                 </span>
@@ -137,6 +140,36 @@ export default function TokenUsageCard({ summary, onRefresh, isRefreshing }: Pro
   )
 }
 
+function TokenDayTooltip({ day, maxDayTokens }: { day: TokenUsageDay; maxDayTokens: number }) {
+  const percentage = maxDayTokens > 0
+    ? Math.round((day.usage.totalTokens / maxDayTokens) * 100)
+    : 0
+
+  return (
+    <div>
+      <div className="flex items-center justify-between gap-3">
+        <span className="text-[11px] font-medium text-fg">{day.date}</span>
+        <span className="text-[10px] text-fg-subtle">峰值的 {percentage}%</span>
+      </div>
+      <div className="mt-2 pt-2 border-t border-line-subtle space-y-1">
+        <TooltipRow label="总 Token" value={formatNumber(day.usage.totalTokens)} primary />
+        <TooltipRow label="输入 / 缓存" value={`${formatNumber(day.usage.inputTokens)} / ${formatNumber(day.usage.cachedInputTokens)}`} />
+        <TooltipRow label="输出 / 推理" value={`${formatNumber(day.usage.outputTokens)} / ${formatNumber(day.usage.reasoningOutputTokens)}`} />
+        <TooltipRow label="Token 事件" value={formatNumber(day.turns)} />
+      </div>
+    </div>
+  )
+}
+
+function TooltipRow({ label, value, primary = false }: { label: string; value: string; primary?: boolean }) {
+  return (
+    <div className="flex items-center justify-between gap-3 text-[10px]">
+      <span className="text-fg-subtle">{label}</span>
+      <span className={cn('font-medium tabular-nums', primary ? 'text-primary' : 'text-fg')}>{value}</span>
+    </div>
+  )
+}
+
 function TokenStat({ icon, label, value, hint }: {
   icon: React.ReactNode
   label: string
@@ -150,7 +183,7 @@ function TokenStat({ icon, label, value, hint }: {
         <span className="text-[10px] text-fg-subtle">{label}</span>
       </div>
       <div className="text-lg font-semibold text-fg font-serif tabular-nums leading-tight">{value}</div>
-      <p className="text-[9px] text-fg-subtle truncate" title={hint}>{hint}</p>
+      <p className="text-[9px] text-fg-subtle truncate">{hint}</p>
     </div>
   )
 }
