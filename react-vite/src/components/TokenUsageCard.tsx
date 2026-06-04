@@ -47,7 +47,7 @@ export default function TokenUsageCard({ summary, onRefresh, isRefreshing }: Pro
         <div>
           <h2 className="text-sm font-semibold text-fg font-serif">Token 计数</h2>
           <p className="text-[11px] text-fg-subtle mt-0.5">
-            读取本机 Codex rollout 中的 token_count 事件，不解析对话内容。
+            读取本机 Codex rollout，今日数据统计至当前时间并每分钟自动更新。
           </p>
         </div>
         <button
@@ -71,7 +71,7 @@ export default function TokenUsageCard({ summary, onRefresh, isRefreshing }: Pro
         <div className="flex items-center justify-between mb-2">
           <span className="text-[11px] text-fg-subtle">近 14 天 token</span>
           <span className="text-[10px] text-fg-subtle">
-            {summary ? `更新于 ${formatDate(summary.fetchedAt)}` : '尚未统计'}
+            {summary ? `统计至 ${formatDate(summary.fetchedAt)}` : '尚未统计'}
           </span>
         </div>
         <div className="flex items-end gap-1.5 h-16">

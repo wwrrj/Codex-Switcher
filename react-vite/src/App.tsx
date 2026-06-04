@@ -33,11 +33,25 @@ export default function App() {
     const intervalMs = Math.max(1, refreshUsageIntervalMinutes || 15) * 60_000
     const timer = window.setInterval(() => {
       void refreshAllUsage(true)
-      void refreshTokenUsage()
     }, intervalMs)
 
     return () => window.clearInterval(timer)
-  }, [accountCount, enableUsageQuery, refreshAllUsage, refreshTokenUsage, refreshUsageIntervalMinutes])
+  }, [accountCount, enableUsageQuery, refreshAllUsage, refreshUsageIntervalMinutes])
+
+  useEffect(() => {
+    const refreshCurrentTokenUsage = () => {
+      if (document.visibilityState === 'visible') void refreshTokenUsage()
+    }
+    const timer = window.setInterval(refreshCurrentTokenUsage, 60_000)
+    window.addEventListener('focus', refreshCurrentTokenUsage)
+    document.addEventListener('visibilitychange', refreshCurrentTokenUsage)
+
+    return () => {
+      window.clearInterval(timer)
+      window.removeEventListener('focus', refreshCurrentTokenUsage)
+      document.removeEventListener('visibilitychange', refreshCurrentTokenUsage)
+    }
+  }, [refreshTokenUsage])
 
   const handleDelete = useCallback(() => {
     const active = useAppStore.getState().activeAccount

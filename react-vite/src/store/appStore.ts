@@ -187,6 +187,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
         switchTarget: null,
       })
       get().addToast('success', `已切换到账号「${name}」`)
+      void get().refreshTokenUsage()
       if (get().settings.enableUsageQuery && get().settings.refreshUsageAfterSwitch) {
         void get().refreshUsage(name)
       }
@@ -203,6 +204,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
       const authStatus = await api.detectCodexAuth()
       set({ accounts, authStatus, activeAccount: active, selectedAccount: active, logs: api.getLogs() })
       get().addToast('success', `已添加账号「${name}」`)
+      void get().refreshTokenUsage()
       if (get().settings.enableUsageQuery) {
         void get().refreshUsage(name)
       }
@@ -282,6 +284,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
       )
       get().recordUsageSnapshot(usage)
       set({ accounts, logs: api.getLogs() })
+      void get().refreshTokenUsage()
     } catch (e: unknown) {
       get().addToast('error', e instanceof Error ? e.message : '查询失败')
     } finally {
@@ -327,6 +330,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
           done: true,
         },
       })
+      void get().refreshTokenUsage()
       if (!silent) setTimeout(() => set({ refreshProgress: null }), 4000)
     } catch (e: unknown) {
       set({ isRefreshingAll: false, refreshProgress: null })
