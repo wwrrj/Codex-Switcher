@@ -811,6 +811,14 @@ fn reopen_codex_app() {
     }
 }
 
+fn run_codex_logout() {
+    let _ = Command::new("codex")
+        .arg("logout")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+}
+
 // ── Auth detection ──
 
 pub fn detect_auth(home: &Path, names: &[String]) -> Result<CodexAuthStatus> {
@@ -971,6 +979,42 @@ pub fn add_account(
         last_usage_check_at: None,
         manual_subscription_override: None,
         source: None,
+    })
+}
+
+pub fn prepare_new_account_login(home: &Path) -> Result<NewAccountLoginPreparation> {
+    let accounts = list_accounts(home)?;
+    let names: Vec<String> = accounts
+        .iter()
+        .map(|account| account.name.clone())
+        .collect();
+    let status = detect_auth(home, &names)?;
+    let previous_account = status.matched_account.clone();
+
+    if previous_account.is_some() {
+        close_codex_processes();
+
+        let ap = auth_path(home);
+        if ap.exists() {
+            let _ = backup_auth(home, 10);
+        }
+
+        run_codex_logout();
+
+        if ap.exists() {
+            std::fs::remove_file(&ap)
+                .with_context(|| format!("删除旧 auth.json 失败: {}", ap.display()))?;
+        }
+
+        reopen_codex_app();
+    } else if !status.exists {
+        reopen_codex_app();
+    }
+
+    Ok(NewAccountLoginPreparation {
+        did_logout: previous_account.is_some(),
+        previous_account,
+        auth_path: auth_path(home).display().to_string(),
     })
 }
 

@@ -141,6 +141,14 @@ pub struct TokenUsageSummary {
     pub warning: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NewAccountLoginPreparation {
+    pub did_logout: bool,
+    pub previous_account: Option<String>,
+    pub auth_path: String,
+}
+
 // ── Account & Auth ──
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

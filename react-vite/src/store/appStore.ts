@@ -186,7 +186,9 @@ export const useAppStore = create<AppStore>((set, get) => ({
     try {
       await api.addCurrentAccount(name, note, overwrite)
       const accounts = await api.listAccounts()
-      set({ accounts, logs: api.getLogs() })
+      const active = accounts.find((account) => account.isActive)?.name ?? name
+      const authStatus = await api.detectCodexAuth()
+      set({ accounts, authStatus, activeAccount: active, selectedAccount: active, logs: api.getLogs() })
       get().addToast('success', `已添加账号「${name}」`)
     } catch (e: unknown) {
       throw e

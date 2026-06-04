@@ -1,5 +1,5 @@
 import { invoke } from '@tauri-apps/api/core'
-import type { AccountMeta, CodexAuthStatus, CodexUsageInfo, AppSettings, AppLog, AppState, SubscriptionInfo, SubscriptionPlan, TokenUsageSummary } from './types'
+import type { AccountMeta, CodexAuthStatus, CodexUsageInfo, AppSettings, AppLog, AppState, SubscriptionInfo, SubscriptionPlan, TokenUsageSummary, NewAccountLoginPreparation } from './types'
 
 // ── Frontend-only log management ──
 
@@ -43,6 +43,14 @@ export async function addCurrentAccount(name: string, note?: string, overwrite?:
   const account = await invoke<AccountMeta>('add_account', { name, note: note ?? null, overwrite: overwrite ?? false })
   addLog('success', `已添加账号「${name}」`)
   return account
+}
+
+export async function prepareNewAccountLogin(): Promise<NewAccountLoginPreparation> {
+  const result = await invoke<NewAccountLoginPreparation>('prepare_new_account_login')
+  if (result.didLogout) {
+    addLog('info', `已退出当前 Codex 账号「${result.previousAccount ?? 'unknown'}」，等待新账号登录`)
+  }
+  return result
 }
 
 export async function listAccounts(): Promise<AccountMeta[]> {

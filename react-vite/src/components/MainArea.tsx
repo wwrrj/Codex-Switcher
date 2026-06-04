@@ -126,10 +126,6 @@ export default function MainArea({ onRename, onDelete, onAddAccount, onOpenSetti
           />
         </div>
 
-        <UsageHeatmap history={usageHistory} />
-
-        <TokenUsageCard summary={tokenUsage} onRefresh={refreshTokenUsage} />
-
         {isRefreshingAll && <RefreshAllProgress />}
 
         {/* ── Two-column: Account Info + Usage ── */}
@@ -274,6 +270,10 @@ export default function MainArea({ onRename, onDelete, onAddAccount, onOpenSetti
             )}
           </div>
         </div>
+
+        <UsageHeatmap history={usageHistory} />
+
+        <TokenUsageCard summary={tokenUsage} onRefresh={refreshTokenUsage} />
 
         {/* ── Quick actions ── */}
         <div className="flex items-center gap-2 pt-1">

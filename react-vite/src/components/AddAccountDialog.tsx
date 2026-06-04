@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
-import { X, AlertTriangle } from 'lucide-react'
+import { X, AlertTriangle, LogOut, RefreshCw } from 'lucide-react'
 import { useAppStore } from '@/store/appStore'
-import { detectCurrentAuthEmail } from '@/lib/api'
+import { detectCodexAuth, detectCurrentAuthEmail, prepareNewAccountLogin } from '@/lib/api'
 import { validateAccountName, cn } from '@/lib/utils'
 
 interface Props {
@@ -15,27 +15,107 @@ export default function AddAccountDialog({ open, onClose }: Props) {
   const [name, setName] = useState('')
   const [note, setNote] = useState('')
   const [error, setError] = useState<string | null>(null)
-  const [overwrite, setOverwrite] = useState(false)
   const [showOverwrite, setShowOverwrite] = useState(false)
+  const [stage, setStage] = useState<'checking' | 'needs-login' | 'waiting' | 'ready'>('checking')
+  const [statusText, setStatusText] = useState('正在检测当前 Codex 登录状态...')
+  const [previousAccount, setPreviousAccount] = useState<string | null>(null)
 
   useEffect(() => {
-    if (!open || name) return
+    if (!open) return
 
     let cancelled = false
-    detectCurrentAuthEmail()
-      .then((email) => {
-        if (!cancelled && email) setName(email)
+    setStage('checking')
+    setStatusText('正在检测当前 Codex 登录状态...')
+
+    detectCodexAuth()
+      .then(async (status) => {
+        if (cancelled) return
+        if (status.matchedAccount) {
+          setPreviousAccount(status.matchedAccount)
+          setStatusText(`当前 auth.json 已属于账号池内账号「${status.matchedAccount}」。添加新账号前需要先退出当前 Codex 登录。`)
+          setStage('needs-login')
+          return
+        }
+
+        if (!status.exists) {
+          setPreviousAccount(null)
+          setStatusText('当前 auth.json 不存在。请打开 Codex 并登录新账号。')
+          setStage('needs-login')
+          return
+        }
+
+        const email = await detectCurrentAuthEmail()
+        if (cancelled) return
+        if (email) setName(email)
+        setStatusText(email ? `已解析新账号邮箱：${email}` : '已检测到新的 auth.json，但没有解析到邮箱，可手动填写账号名。')
+        setStage('ready')
       })
       .catch(() => {
-        // Email is a convenience default; manual input remains the fallback.
+        if (!cancelled) {
+          setStatusText('检测失败，可手动填写账号名后添加当前 auth.json。')
+          setStage('ready')
+        }
       })
 
     return () => {
       cancelled = true
     }
-  }, [open, name])
+  }, [open])
+
+  useEffect(() => {
+    if (!open || stage !== 'waiting') return
+
+    let cancelled = false
+    const timer = window.setInterval(async () => {
+      try {
+        const status = await detectCodexAuth()
+        if (cancelled) return
+
+        if (!status.exists) {
+          setStatusText('等待 Codex 重新生成 auth.json。请在打开的 Codex 登录窗口中完成登录。')
+          return
+        }
+
+        if (status.matchedAccount) {
+          setStatusText(`检测到的 auth.json 仍是账号池内账号「${status.matchedAccount}」，请登录一个新账号。`)
+          return
+        }
+
+        const email = await detectCurrentAuthEmail()
+        if (cancelled) return
+        if (email) setName(email)
+        setStatusText(email ? `已解析新账号邮箱：${email}` : '已检测到新的 auth.json，但没有解析到邮箱，可手动填写账号名。')
+        setStage('ready')
+      } catch {
+        if (!cancelled) setStatusText('等待 Codex 重新生成 auth.json。')
+      }
+    }, 2000)
+
+    return () => {
+      cancelled = true
+      window.clearInterval(timer)
+    }
+  }, [open, stage])
 
   if (!open) return null
+
+  const handleStartLogin = async () => {
+    try {
+      setError(null)
+      setStage('waiting')
+      setStatusText('正在退出当前 Codex 登录并打开登录窗口...')
+      const result = await prepareNewAccountLogin()
+      if (result.previousAccount) setPreviousAccount(result.previousAccount)
+      setStatusText(
+        result.didLogout
+          ? '已退出当前 Codex 登录。请在打开的 Codex 窗口中登录新账号。'
+          : '请在 Codex 中登录新账号。'
+      )
+    } catch (e: unknown) {
+      setStage('needs-login')
+      setError(e instanceof Error ? e.message : '退出当前登录失败')
+    }
+  }
 
   const handleAdd = async () => {
     const err = validateAccountName(name)
@@ -59,8 +139,10 @@ export default function AddAccountDialog({ open, onClose }: Props) {
     setName('')
     setNote('')
     setError(null)
-    setOverwrite(false)
     setShowOverwrite(false)
+    setStage('checking')
+    setStatusText('正在检测当前 Codex 登录状态...')
+    setPreviousAccount(null)
     onClose()
   }
 
@@ -76,6 +158,39 @@ export default function AddAccountDialog({ open, onClose }: Props) {
         </div>
 
         <div className="p-4 space-y-3">
+          {stage !== 'ready' && !showOverwrite && (
+            <div className={cn(
+              'rounded-md border p-3',
+              stage === 'needs-login' ? 'bg-warning-muted border-warning/20' : 'bg-bg-elevated border-line-subtle'
+            )}>
+              <div className="flex items-start gap-2">
+                {stage === 'waiting' || stage === 'checking' ? (
+                  <RefreshCw className="w-4 h-4 text-primary shrink-0 mt-0.5 animate-spin" />
+                ) : (
+                  <LogOut className="w-4 h-4 text-warning shrink-0 mt-0.5" />
+                )}
+                <div>
+                  <p className="text-xs font-medium text-fg">
+                    {stage === 'needs-login' ? '需要登录新账号' : '等待新 auth.json'}
+                  </p>
+                  <p className="text-xs text-fg-muted mt-1 leading-relaxed">{statusText}</p>
+                  {previousAccount && (
+                    <p className="text-[11px] text-fg-subtle mt-1">当前账号：{previousAccount}</p>
+                  )}
+                </div>
+              </div>
+              {stage === 'needs-login' && (
+                <button
+                  onClick={handleStartLogin}
+                  className="mt-3 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium text-white bg-warning hover:bg-warning/80 transition-colors"
+                >
+                  <LogOut className="w-3 h-3" />
+                  {previousAccount ? '退出并登录新账号' : '打开 Codex 登录'}
+                </button>
+              )}
+            </div>
+          )}
+
           {showOverwrite ? (
             <div className="flex items-start gap-2 p-3 rounded-md bg-warning-muted border border-warning/20">
               <AlertTriangle className="w-4 h-4 text-warning shrink-0 mt-0.5" />
@@ -91,7 +206,7 @@ export default function AddAccountDialog({ open, onClose }: Props) {
           ) : (
             <>
               <div>
-                <label className="block text-xs font-medium text-fg-muted mb-1">账号别名</label>
+                <label className="block text-xs font-medium text-fg-muted mb-1">账号邮箱</label>
                 <input
                   type="text"
                   value={name}
@@ -99,6 +214,7 @@ export default function AddAccountDialog({ open, onClose }: Props) {
                   placeholder="例如 zhangsan@gmail.com"
                   className="w-full px-2.5 py-1.5 rounded-md text-xs bg-bg border border-line text-fg placeholder:text-fg-subtle focus:border-primary focus:outline-none"
                   autoFocus
+                  disabled={stage !== 'ready'}
                 />
                 {error && <p className="text-xs text-danger mt-1">{error}</p>}
               </div>
@@ -110,6 +226,7 @@ export default function AddAccountDialog({ open, onClose }: Props) {
                   onChange={(e) => setNote(e.target.value)}
                   placeholder="例如：主账号、工作账号"
                   className="w-full px-2.5 py-1.5 rounded-md text-xs bg-bg border border-line text-fg placeholder:text-fg-subtle focus:border-primary focus:outline-none"
+                  disabled={stage !== 'ready'}
                 />
               </div>
             </>
@@ -133,6 +250,7 @@ export default function AddAccountDialog({ open, onClose }: Props) {
           ) : (
             <button
               onClick={handleAdd}
+              disabled={stage !== 'ready'}
               className="px-3 py-1.5 rounded-md text-xs font-medium text-white bg-primary hover:bg-primary-hover transition-colors"
             >
               添加

@@ -48,6 +48,12 @@ export interface TokenUsageSummary {
   warning?: string;
 }
 
+export interface NewAccountLoginPreparation {
+  didLogout: boolean;
+  previousAccount?: string;
+  authPath: string;
+}
+
 export interface DailyUsageEntry {
   date: string;
   total: number;

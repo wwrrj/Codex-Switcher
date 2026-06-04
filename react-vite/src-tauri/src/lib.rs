@@ -19,6 +19,7 @@ pub fn run() {
             detect_codex_auth,
             list_accounts,
             add_account,
+            prepare_new_account_login,
             remove_account,
             rename_account,
             switch_account,

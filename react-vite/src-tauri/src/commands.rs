@@ -53,6 +53,12 @@ pub fn add_account(
 }
 
 #[tauri::command]
+pub fn prepare_new_account_login() -> Result<NewAccountLoginPreparation, String> {
+    let actual_home = actual_home()?;
+    core::prepare_new_account_login(&actual_home).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 pub fn remove_account(name: String, force: Option<bool>) -> Result<(), String> {
     let actual_home = actual_home()?;
     core::remove_account(&actual_home, &name, force.unwrap_or(false)).map_err(|e| e.to_string())
