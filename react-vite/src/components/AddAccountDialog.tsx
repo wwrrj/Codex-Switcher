@@ -103,7 +103,7 @@ export default function AddAccountDialog({ open, onClose }: Props) {
     try {
       setError(null)
       setStage('waiting')
-      setStatusText('正在退出当前 Codex 登录并打开登录窗口...')
+      setStatusText(previousAccount ? '正在静默关闭 Codex 并退出当前登录...' : '正在打开 Codex 登录窗口...')
       const result = await prepareNewAccountLogin()
       if (result.previousAccount) setPreviousAccount(result.previousAccount)
       setStatusText(

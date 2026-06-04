@@ -13,6 +13,12 @@ use std::process::{Command, Stdio};
 
 use crate::models::*;
 
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
+
+#[cfg(target_os = "windows")]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
+
 // ── Path helpers ──
 
 pub fn codex_home(custom: Option<&str>) -> Result<PathBuf> {
@@ -762,6 +768,7 @@ fn close_codex_processes() {
     {
         let _ = Command::new("taskkill")
             .args(["/IM", "codex.exe", "/T", "/F"])
+            .creation_flags(CREATE_NO_WINDOW)
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .status();
@@ -796,6 +803,8 @@ fn reopen_codex_app() {
     {
         let _ = Command::new("cmd")
             .args(["/C", "start", "", "codex", "app"])
+            .creation_flags(CREATE_NO_WINDOW)
+            .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .spawn();
@@ -812,11 +821,17 @@ fn reopen_codex_app() {
 }
 
 fn run_codex_logout() {
-    let _ = Command::new("codex")
+    let mut command = Command::new("codex");
+    command
         .arg("logout")
+        .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status();
+        .stderr(Stdio::null());
+
+    #[cfg(target_os = "windows")]
+    command.creation_flags(CREATE_NO_WINDOW);
+
+    let _ = command.status();
 }
 
 // ── Auth detection ──

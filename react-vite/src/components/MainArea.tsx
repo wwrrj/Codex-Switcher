@@ -22,6 +22,7 @@ export default function MainArea({ onRename, onDelete, onAddAccount, onOpenSetti
   const isRefreshingAll = useAppStore((s) => s.isRefreshingAll)
   const refreshingUsageAccount = useAppStore((s) => s.refreshingUsageAccount)
   const isRefreshingTokenUsage = useAppStore((s) => s.isRefreshingTokenUsage)
+  const switchingAccount = useAppStore((s) => s.switchingAccount)
   const usageHistory = useAppStore((s) => s.usageHistory)
   const tokenUsage = useAppStore((s) => s.tokenUsage)
   const refreshUsage = useAppStore((s) => s.refreshUsage)
@@ -286,11 +287,15 @@ export default function MainArea({ onRename, onDelete, onAddAccount, onOpenSetti
           {!account.isActive && (
             <button
               onClick={() => switchToAccount(account.name)}
-              disabled={isRefreshingAll}
+              disabled={isRefreshingAll || switchingAccount !== null}
               className="flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-xs font-medium text-white bg-primary hover:bg-primary-hover transition-colors disabled:opacity-50"
             >
-              <ArrowRightLeft className="w-3.5 h-3.5" />
-              切换到此账号
+              {switchingAccount === account.name ? (
+                <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+              ) : (
+                <ArrowRightLeft className="w-3.5 h-3.5" />
+              )}
+              {switchingAccount === account.name ? '正在关闭 Codex' : '切换到此账号'}
             </button>
           )}
           <button

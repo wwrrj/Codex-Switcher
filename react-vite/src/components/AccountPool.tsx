@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react'
-import { Plus, Users, Star } from 'lucide-react'
+import { Plus, Users, Star, RefreshCw } from 'lucide-react'
 import { useAppStore } from '@/store/appStore'
 import { cn, shortName } from '@/lib/utils'
 import SubscriptionBadge from './SubscriptionBadge'
@@ -13,6 +13,7 @@ export default function AccountPool({ onAddAccount }: Props) {
   const activeAccount = useAppStore((s) => s.activeAccount)
   const switchToAccount = useAppStore((s) => s.switchToAccount)
   const isRefreshingAll = useAppStore((s) => s.isRefreshingAll)
+  const switchingAccount = useAppStore((s) => s.switchingAccount)
   const togglePriority = useAppStore((s) => s.togglePriority)
   const loading = useAppStore((s) => s.loading)
 
@@ -41,7 +42,7 @@ export default function AccountPool({ onAddAccount }: Props) {
   }, [loading])
 
   const handleCardClick = (name: string) => {
-    if (name === activeAccount || isRefreshingAll) return
+    if (name === activeAccount || isRefreshingAll || switchingAccount) return
     setConfirmTarget(name)
   }
 
@@ -104,7 +105,7 @@ export default function AccountPool({ onAddAccount }: Props) {
                 <button
                   onClick={() => handleCardClick(acc.name)}
                   onContextMenu={(e) => handleContextMenu(acc.name, e)}
-                  disabled={isRefreshingAll && !isActive}
+                  disabled={(isRefreshingAll && !isActive) || switchingAccount !== null}
                   className={cn(
                     'w-[168px] p-3.5 rounded-lg text-left transition-all',
                     'border bg-bg',
@@ -113,7 +114,7 @@ export default function AccountPool({ onAddAccount }: Props) {
                       : isConfirming
                         ? 'border-primary/50 bg-primary-muted'
                         : 'border-line-subtle hover:border-line hover:bg-bg-hover',
-                    isRefreshingAll && !isActive && 'opacity-50 cursor-not-allowed'
+                    ((isRefreshingAll && !isActive) || switchingAccount !== null) && 'opacity-50 cursor-not-allowed'
                   )}
                 >
                   {/* Status dot + name — center-aligned on same line */}
@@ -188,9 +189,15 @@ export default function AccountPool({ onAddAccount }: Props) {
                     <div className="flex gap-1.5">
                       <button
                         onClick={handleConfirmSwitch}
+                        disabled={switchingAccount !== null}
                         className="px-2.5 py-1 rounded-md text-[11px] font-medium text-white bg-primary hover:bg-primary-hover transition-colors"
                       >
-                        确认
+                        {switchingAccount === acc.name ? (
+                          <span className="flex items-center gap-1">
+                            <RefreshCw className="w-3 h-3 animate-spin" />
+                            正在关闭 Codex
+                          </span>
+                        ) : '确认'}
                       </button>
                       <button
                         onClick={() => setConfirmTarget(null)}

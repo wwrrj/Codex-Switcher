@@ -84,6 +84,7 @@ interface AppStore {
   isRefreshingAll: boolean
   refreshingUsageAccount: string | null
   isRefreshingTokenUsage: boolean
+  switchingAccount: string | null
   refreshProgress: RefreshProgress | null
   toasts: ToastItem[]
   switchTarget: string | null
@@ -139,6 +140,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
   isRefreshingAll: false,
   refreshingUsageAccount: null,
   isRefreshingTokenUsage: false,
+  switchingAccount: null,
   refreshProgress: null,
   toasts: [],
   switchTarget: null,
@@ -174,6 +176,8 @@ export const useAppStore = create<AppStore>((set, get) => ({
   selectAccount: (name) => set({ selectedAccount: name }),
 
   switchToAccount: async (name) => {
+    if (get().switchingAccount) return
+    set({ switchingAccount: name })
     try {
       await api.switchAccount(name)
       const accounts = await api.listAccounts()
@@ -193,6 +197,8 @@ export const useAppStore = create<AppStore>((set, get) => ({
       }
     } catch (e: unknown) {
       get().addToast('error', e instanceof Error ? e.message : '切换失败')
+    } finally {
+      set({ switchingAccount: null })
     }
   },
 
