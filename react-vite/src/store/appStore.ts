@@ -1,6 +1,75 @@
 import { create } from 'zustand'
-import type { AccountMeta, CodexAuthStatus, AppLog, AppSettings, RefreshProgress, ToastItem, SubscriptionPlan } from '@/lib/types'
+import type { AccountMeta, CodexAuthStatus, AppLog, AppSettings, RefreshProgress, ToastItem, SubscriptionPlan, CodexUsageInfo, DailyUsageEntry, TokenUsageSummary } from '@/lib/types'
 import * as api from '@/lib/api'
+
+const USAGE_HISTORY_KEY = 'codex-switcher:daily-usage-history:v1'
+const USAGE_HISTORY_LIMIT_DAYS = 182
+
+function dateKeyFromIso(iso: string): string {
+  const d = new Date(iso)
+  const year = d.getFullYear()
+  const month = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
+function loadUsageHistory(): DailyUsageEntry[] {
+  try {
+    const raw = window.localStorage.getItem(USAGE_HISTORY_KEY)
+    if (!raw) return []
+    const parsed = JSON.parse(raw) as DailyUsageEntry[]
+    if (!Array.isArray(parsed)) return []
+    return parsed.filter((entry) => entry.date && typeof entry.total === 'number')
+  } catch {
+    return []
+  }
+}
+
+function saveUsageHistory(history: DailyUsageEntry[]) {
+  window.localStorage.setItem(USAGE_HISTORY_KEY, JSON.stringify(history))
+}
+
+function trimUsageHistory(history: DailyUsageEntry[]): DailyUsageEntry[] {
+  return [...history]
+    .sort((a, b) => a.date.localeCompare(b.date))
+    .slice(-USAGE_HISTORY_LIMIT_DAYS)
+}
+
+function usageScore(usage: CodexUsageInfo): number {
+  const fiveHour = usage.windows.find((w) => w.window === '5h')?.percentage ?? 0
+  const sevenDay = usage.windows.find((w) => w.window === '7d')?.percentage ?? 0
+  return Math.max(fiveHour, sevenDay)
+}
+
+function mergeUsageIntoHistory(history: DailyUsageEntry[], usage: CodexUsageInfo): DailyUsageEntry[] {
+  const date = dateKeyFromIso(usage.fetchedAt)
+  const score = usageScore(usage)
+  const fiveHour = usage.windows.find((w) => w.window === '5h')?.percentage ?? 0
+  const sevenDay = usage.windows.find((w) => w.window === '7d')?.percentage ?? 0
+  const existing = history.find((entry) => entry.date === date)
+  const entry: DailyUsageEntry = existing
+    ? {
+        ...existing,
+        accounts: { ...existing.accounts, [usage.accountName]: score },
+      }
+    : {
+        date,
+        total: 0,
+        samples: 0,
+        maxFiveHourPercentage: 0,
+        maxSevenDayPercentage: 0,
+        accounts: { [usage.accountName]: score },
+      }
+
+  entry.total = Object.values(entry.accounts).reduce((sum, value) => sum + value, 0)
+  entry.samples = Object.keys(entry.accounts).length
+  entry.maxFiveHourPercentage = Math.max(entry.maxFiveHourPercentage, fiveHour)
+  entry.maxSevenDayPercentage = Math.max(entry.maxSevenDayPercentage, sevenDay)
+
+  const next = history.filter((item) => item.date !== date)
+  next.push(entry)
+  return trimUsageHistory(next)
+}
 
 interface AppStore {
   accounts: AccountMeta[]
@@ -16,6 +85,8 @@ interface AppStore {
   toasts: ToastItem[]
   switchTarget: string | null
   subscriptionOverrideTarget: string | null
+  usageHistory: DailyUsageEntry[]
+  tokenUsage: TokenUsageSummary | null
 
   init: () => Promise<void>
   selectAccount: (name: string) => void
@@ -39,6 +110,8 @@ interface AppStore {
   openSubscriptionOverrideDialog: (name: string) => void
   closeSubscriptionOverrideDialog: () => void
   togglePriority: (name: string) => Promise<void>
+  recordUsageSnapshot: (usage: CodexUsageInfo) => void
+  refreshTokenUsage: () => Promise<void>
 }
 
 export const useAppStore = create<AppStore>((set, get) => ({
@@ -63,6 +136,8 @@ export const useAppStore = create<AppStore>((set, get) => ({
   toasts: [],
   switchTarget: null,
   subscriptionOverrideTarget: null,
+  usageHistory: loadUsageHistory(),
+  tokenUsage: null,
 
   init: async () => {
     set({ loading: true })
@@ -79,6 +154,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
         loading: false,
       })
       get().applyTheme(state.settings.theme)
+      void get().refreshTokenUsage()
     } catch (e: unknown) {
       set({ loading: false })
       get().addToast('error', e instanceof Error ? e.message : '初始化失败')
@@ -181,6 +257,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
           ? { ...a, usage, subscription: usage.subscription ?? a.subscription, lastUsageCheckAt: usage.fetchedAt }
           : a
       )
+      get().recordUsageSnapshot(usage)
       set({ accounts, logs: api.getLogs() })
     } catch (e: unknown) {
       get().addToast('error', e instanceof Error ? e.message : '查询失败')
@@ -199,6 +276,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
         }
       )
       const usageByAccount = new Map(usages.map((usage) => [usage.accountName, usage]))
+      usages.forEach((usage) => get().recordUsageSnapshot(usage))
       const accounts = get().accounts.map((account) => {
         const usage = usageByAccount.get(account.name)
         if (!usage) return account
@@ -298,6 +376,21 @@ export const useAppStore = create<AppStore>((set, get) => ({
       set({ accounts: allAccounts, logs: api.getLogs() })
     } catch (e: unknown) {
       get().addToast('error', e instanceof Error ? e.message : '设置优先失败')
+    }
+  },
+
+  recordUsageSnapshot: (usage) => {
+    const history = mergeUsageIntoHistory(get().usageHistory, usage)
+    saveUsageHistory(history)
+    set({ usageHistory: history })
+  },
+
+  refreshTokenUsage: async () => {
+    try {
+      const tokenUsage = await api.getTokenUsageSummary()
+      set({ tokenUsage, logs: api.getLogs() })
+    } catch (e: unknown) {
+      get().addToast('error', e instanceof Error ? e.message : 'Token 统计失败')
     }
   },
 

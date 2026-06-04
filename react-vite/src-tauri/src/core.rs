@@ -1,11 +1,15 @@
 use anyhow::{Context, Result};
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+use chrono::{Local, NaiveDate, Utc};
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, USER_AGENT};
+use serde::Deserialize;
+use serde_json::Value;
+use sha2::{Digest, Sha256};
+use std::collections::BTreeMap;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use sha2::{Sha256, Digest};
-use chrono::Utc;
-use serde_json::Value;
-use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 
 use crate::models::*;
 
@@ -14,19 +18,39 @@ use crate::models::*;
 pub fn codex_home(custom: Option<&str>) -> Result<PathBuf> {
     if let Some(p) = custom {
         let pb = PathBuf::from(p);
-        if pb.exists() { return Ok(pb); }
+        if pb.exists() {
+            return Ok(pb);
+        }
         return Err(anyhow::anyhow!("自定义路径不存在: {}", p));
     }
     let home = dirs::home_dir().context("无法检测用户主目录")?;
     Ok(home.join(".codex"))
 }
 
-fn auth_path(home: &Path) -> PathBuf { home.join("auth.json") }
-fn accounts_dir(home: &Path) -> PathBuf { home.join("accounts") }
-fn backup_dir(home: &Path) -> PathBuf { home.join("backups") }
-fn config_dir(home: &Path) -> PathBuf { home.join("config") }
-fn config_file(home: &Path) -> PathBuf { config_dir(home).join("settings.json") }
-fn priority_file(home: &Path) -> PathBuf { config_dir(home).join("priorities.json") }
+fn auth_path(home: &Path) -> PathBuf {
+    home.join("auth.json")
+}
+fn accounts_dir(home: &Path) -> PathBuf {
+    home.join("accounts")
+}
+fn backup_dir(home: &Path) -> PathBuf {
+    home.join("backups")
+}
+fn config_dir(home: &Path) -> PathBuf {
+    home.join("config")
+}
+fn config_file(home: &Path) -> PathBuf {
+    config_dir(home).join("settings.json")
+}
+fn priority_file(home: &Path) -> PathBuf {
+    config_dir(home).join("priorities.json")
+}
+fn sessions_dir(home: &Path) -> PathBuf {
+    home.join("sessions")
+}
+fn archived_sessions_dir(home: &Path) -> PathBuf {
+    home.join("archived_sessions")
+}
 
 // ── File utilities ──
 
@@ -53,7 +77,9 @@ fn write_json(path: &Path, val: &Value) -> Result<()> {
 }
 
 fn ensure_dir(path: &Path) -> Result<()> {
-    if !path.exists() { std::fs::create_dir_all(path)?; }
+    if !path.exists() {
+        std::fs::create_dir_all(path)?;
+    }
     Ok(())
 }
 
@@ -70,7 +96,8 @@ fn display_name_for_plan(plan: &SubscriptionPlan) -> String {
         SubscriptionPlan::Edu => "Edu",
         SubscriptionPlan::ApiKey => "API Key",
         SubscriptionPlan::Unknown => "Unknown",
-    }.to_string()
+    }
+    .to_string()
 }
 
 fn manual_subscription(plan: SubscriptionPlan) -> SubscriptionInfo {
@@ -86,7 +113,11 @@ fn manual_subscription(plan: SubscriptionPlan) -> SubscriptionInfo {
 }
 
 fn plan_from_raw(raw: &str) -> Option<SubscriptionPlan> {
-    let normalized = raw.trim().to_lowercase().replace('-', "_").replace(' ', "_");
+    let normalized = raw
+        .trim()
+        .to_lowercase()
+        .replace('-', "_")
+        .replace(' ', "_");
     match normalized.as_str() {
         "free" => Some(SubscriptionPlan::Free),
         "go" | "chatgpt_go" => Some(SubscriptionPlan::Go),
@@ -127,7 +158,10 @@ fn find_token(value: &Value) -> Option<String> {
     collect_string_fields(value, None, &mut fields);
     fields.into_iter().find_map(|(key, val)| {
         let key = key.to_lowercase();
-        let likely_id_token = key == "idtoken" || key == "id_token" || key.ends_with("idtoken") || key.ends_with("id_token");
+        let likely_id_token = key == "idtoken"
+            || key == "id_token"
+            || key.ends_with("idtoken")
+            || key.ends_with("id_token");
         if likely_id_token && val.split('.').count() == 3 {
             Some(val)
         } else {
@@ -185,7 +219,10 @@ pub fn detect_email_for_current_auth(home: &Path) -> Result<Option<String>> {
     detect_email_from_auth_file(&ap)
 }
 
-fn infer_subscription_from_value(value: &Value, source: SubscriptionSource) -> Option<SubscriptionInfo> {
+fn infer_subscription_from_value(
+    value: &Value,
+    source: SubscriptionSource,
+) -> Option<SubscriptionInfo> {
     let mut fields = Vec::new();
     collect_string_fields(value, None, &mut fields);
 
@@ -206,14 +243,24 @@ fn infer_subscription_from_value(value: &Value, source: SubscriptionSource) -> O
         }
     }
 
-    let plan_keys = ["plan", "subscription", "tier", "sku", "license", "account_type"];
+    let plan_keys = [
+        "plan",
+        "subscription",
+        "tier",
+        "sku",
+        "license",
+        "account_type",
+    ];
     for (key, raw) in &fields {
         let key_l = key.to_lowercase();
         if plan_keys.iter().any(|needle| key_l.contains(needle)) {
             if let Some(plan) = plan_from_raw(raw) {
                 let workspace = matches!(
                     plan,
-                    SubscriptionPlan::Team | SubscriptionPlan::Business | SubscriptionPlan::Enterprise | SubscriptionPlan::Edu
+                    SubscriptionPlan::Team
+                        | SubscriptionPlan::Business
+                        | SubscriptionPlan::Enterprise
+                        | SubscriptionPlan::Edu
                 );
                 return Some(SubscriptionInfo {
                     display_name: display_name_for_plan(&plan),
@@ -234,13 +281,15 @@ fn infer_subscription_from_value(value: &Value, source: SubscriptionSource) -> O
 pub fn detect_subscription_from_auth_file(auth_file: &Path) -> Result<SubscriptionInfo> {
     let auth_json = read_json(auth_file)?;
 
-    if let Some(info) = infer_subscription_from_value(&auth_json, SubscriptionSource::AgentIdentity) {
+    if let Some(info) = infer_subscription_from_value(&auth_json, SubscriptionSource::AgentIdentity)
+    {
         return Ok(info);
     }
 
     if let Some(token) = find_token(&auth_json) {
         if let Some(payload) = decode_jwt_payload(&token) {
-            if let Some(info) = infer_subscription_from_value(&payload, SubscriptionSource::IdToken) {
+            if let Some(info) = infer_subscription_from_value(&payload, SubscriptionSource::IdToken)
+            {
                 return Ok(info);
             }
         }
@@ -351,7 +400,8 @@ fn read_chatgpt_base_url(home: &Path) -> String {
 
 fn normalize_chatgpt_base_url(raw: &str) -> String {
     let trimmed = raw.trim_end_matches('/').to_string();
-    if (trimmed.starts_with("https://chatgpt.com") || trimmed.starts_with("https://chat.openai.com"))
+    if (trimmed.starts_with("https://chatgpt.com")
+        || trimmed.starts_with("https://chat.openai.com"))
         && !trimmed.contains("/backend-api")
     {
         format!("{trimmed}/backend-api")
@@ -372,7 +422,10 @@ fn plan_subscription_from_raw(raw: &str) -> SubscriptionInfo {
     let plan = plan_from_raw(raw).unwrap_or(SubscriptionPlan::Unknown);
     let is_workspace = matches!(
         plan,
-        SubscriptionPlan::Team | SubscriptionPlan::Business | SubscriptionPlan::Enterprise | SubscriptionPlan::Edu
+        SubscriptionPlan::Team
+            | SubscriptionPlan::Business
+            | SubscriptionPlan::Enterprise
+            | SubscriptionPlan::Edu
     );
     SubscriptionInfo {
         display_name: display_name_for_plan(&plan),
@@ -413,10 +466,14 @@ fn usage_info_from_payload(
 ) -> CodexUsageInfo {
     let mut windows = Vec::new();
     if let Some(rate_limit) = payload.rate_limit {
-        if let Some(window) = usage_window_from_snapshot(UsageWindowKind::FiveHours, rate_limit.primary_window) {
+        if let Some(window) =
+            usage_window_from_snapshot(UsageWindowKind::FiveHours, rate_limit.primary_window)
+        {
             windows.push(window);
         }
-        if let Some(window) = usage_window_from_snapshot(UsageWindowKind::SevenDays, rate_limit.secondary_window) {
+        if let Some(window) =
+            usage_window_from_snapshot(UsageWindowKind::SevenDays, rate_limit.secondary_window)
+        {
             windows.push(window);
         }
     }
@@ -471,17 +528,214 @@ pub async fn fetch_usage_from_auth_file(
         return Err(anyhow::anyhow!("Codex 用量接口返回 {}: {}", status, body));
     }
 
-    let payload: CodexUsageApiResponse = serde_json::from_str(&body)
-        .with_context(|| format!("解析 Codex 用量响应失败: {body}"))?;
+    let payload: CodexUsageApiResponse =
+        serde_json::from_str(&body).with_context(|| format!("解析 Codex 用量响应失败: {body}"))?;
     let subscription = detect_subscription_from_auth_file(auth_file).ok();
     Ok(usage_info_from_payload(account_name, payload, subscription))
+}
+
+// ── Local token usage ──
+
+#[derive(Debug, Deserialize)]
+struct RolloutLine {
+    timestamp: Option<String>,
+    payload: Option<RolloutPayload>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RolloutPayload {
+    #[serde(rename = "type")]
+    payload_type: Option<String>,
+    info: Option<RolloutTokenUsageInfo>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RolloutTokenUsageInfo {
+    total_token_usage: TokenUsageBreakdown,
+    last_token_usage: TokenUsageBreakdown,
+}
+
+fn add_token_usage(target: &mut TokenUsageBreakdown, usage: &TokenUsageBreakdown) {
+    target.input_tokens += usage.input_tokens.max(0);
+    target.cached_input_tokens += usage.cached_input_tokens.max(0);
+    target.output_tokens += usage.output_tokens.max(0);
+    target.reasoning_output_tokens += usage.reasoning_output_tokens.max(0);
+    target.total_tokens += usage.total_tokens.max(0);
+}
+
+fn max_token_usage(target: &mut TokenUsageBreakdown, usage: &TokenUsageBreakdown) {
+    target.input_tokens = target.input_tokens.max(usage.input_tokens);
+    target.cached_input_tokens = target.cached_input_tokens.max(usage.cached_input_tokens);
+    target.output_tokens = target.output_tokens.max(usage.output_tokens);
+    target.reasoning_output_tokens = target
+        .reasoning_output_tokens
+        .max(usage.reasoning_output_tokens);
+    target.total_tokens = target.total_tokens.max(usage.total_tokens);
+}
+
+fn date_key_from_timestamp(timestamp: Option<&str>, path: &Path) -> Option<String> {
+    if let Some(raw) = timestamp {
+        if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(raw) {
+            return Some(dt.date_naive().to_string());
+        }
+        for fmt in ["%Y/%m/%d %H:%M:%S", "%Y-%m-%d %H:%M:%S"] {
+            if let Ok(dt) = chrono::NaiveDateTime::parse_from_str(raw, fmt) {
+                return Some(dt.date().to_string());
+            }
+        }
+        if let Some(prefix) = raw.get(0..10) {
+            let normalized = prefix.replace('/', "-");
+            if NaiveDate::parse_from_str(&normalized, "%Y-%m-%d").is_ok() {
+                return Some(normalized);
+            }
+        }
+    }
+
+    let parts: Vec<String> = path
+        .components()
+        .map(|component| component.as_os_str().to_string_lossy().to_string())
+        .collect();
+    for window in parts.windows(3) {
+        if window[0].len() == 4 && window[1].len() == 2 && window[2].len() == 2 {
+            let candidate = format!("{}-{}-{}", window[0], window[1], window[2]);
+            if NaiveDate::parse_from_str(&candidate, "%Y-%m-%d").is_ok() {
+                return Some(candidate);
+            }
+        }
+    }
+    None
+}
+
+fn collect_rollout_files(dir: &Path, files: &mut Vec<PathBuf>) -> Result<()> {
+    if !dir.exists() {
+        return Ok(());
+    }
+    for entry in
+        std::fs::read_dir(dir).with_context(|| format!("读取目录失败: {}", dir.display()))?
+    {
+        let entry = entry?;
+        let path = entry.path();
+        if path.is_dir() {
+            collect_rollout_files(&path, files)?;
+        } else if path.extension().and_then(|ext| ext.to_str()) == Some("jsonl") {
+            files.push(path);
+        }
+    }
+    Ok(())
+}
+
+fn scan_token_usage_file(
+    path: &Path,
+    by_day: &mut BTreeMap<String, TokenUsageDay>,
+    total: &mut TokenUsageBreakdown,
+    today: &mut TokenUsageBreakdown,
+    max_session_total: &mut TokenUsageBreakdown,
+    today_key: &str,
+) -> Result<u32> {
+    let file = File::open(path).with_context(|| format!("打开会话文件失败: {}", path.display()))?;
+    let reader = BufReader::new(file);
+    let mut events = 0;
+
+    for line in reader.lines() {
+        let line = line?;
+        if !line.contains("\"token_count\"") || !line.contains("\"last_token_usage\"") {
+            continue;
+        }
+        let Ok(parsed) = serde_json::from_str::<RolloutLine>(&line) else {
+            continue;
+        };
+        let Some(payload) = parsed.payload else {
+            continue;
+        };
+        if payload.payload_type.as_deref() != Some("token_count") {
+            continue;
+        }
+        let Some(info) = payload.info else {
+            continue;
+        };
+        if info.last_token_usage.total_tokens <= 0 && info.total_token_usage.total_tokens <= 0 {
+            continue;
+        }
+
+        let increment = if info.last_token_usage.total_tokens > 0 {
+            info.last_token_usage
+        } else {
+            info.total_token_usage.clone()
+        };
+        let date = date_key_from_timestamp(parsed.timestamp.as_deref(), path)
+            .unwrap_or_else(|| today_key.to_string());
+
+        add_token_usage(total, &increment);
+        if date == today_key {
+            add_token_usage(today, &increment);
+        }
+        max_token_usage(max_session_total, &info.total_token_usage);
+
+        let entry = by_day.entry(date.clone()).or_insert_with(|| TokenUsageDay {
+            date,
+            usage: TokenUsageBreakdown::default(),
+            turns: 0,
+        });
+        add_token_usage(&mut entry.usage, &increment);
+        entry.turns += 1;
+        events += 1;
+    }
+
+    Ok(events)
+}
+
+pub fn get_token_usage_summary(home: &Path) -> Result<TokenUsageSummary> {
+    let mut files = Vec::new();
+    collect_rollout_files(&sessions_dir(home), &mut files)?;
+    collect_rollout_files(&archived_sessions_dir(home), &mut files)?;
+    files.sort();
+
+    let today_key = Local::now().date_naive().to_string();
+    let mut by_day = BTreeMap::new();
+    let mut total = TokenUsageBreakdown::default();
+    let mut today = TokenUsageBreakdown::default();
+    let mut max_session_total = TokenUsageBreakdown::default();
+    let mut token_events = 0;
+    let mut warnings = Vec::new();
+
+    for file in &files {
+        match scan_token_usage_file(
+            file,
+            &mut by_day,
+            &mut total,
+            &mut today,
+            &mut max_session_total,
+            &today_key,
+        ) {
+            Ok(events) => token_events += events,
+            Err(err) => warnings.push(format!("{}: {}", file.display(), err)),
+        }
+    }
+
+    Ok(TokenUsageSummary {
+        fetched_at: Utc::now().to_rfc3339(),
+        codex_home: home.display().to_string(),
+        sessions_scanned: files.len() as u32,
+        token_events,
+        total,
+        today,
+        max_session_total,
+        days: by_day.into_values().collect(),
+        warning: if warnings.is_empty() {
+            None
+        } else {
+            Some(format!("{} 个会话文件读取失败", warnings.len()))
+        },
+    })
 }
 
 // ── Backup ──
 
 fn backup_auth(home: &Path, retention: u32) -> Result<PathBuf> {
     let src = auth_path(home);
-    if !src.exists() { return Err(anyhow::anyhow!("auth.json 不存在")); }
+    if !src.exists() {
+        return Err(anyhow::anyhow!("auth.json 不存在"));
+    }
     let bdir = backup_dir(home);
     ensure_dir(&bdir)?;
     let ts = Utc::now().format("%Y%m%d_%H%M%S");
@@ -491,7 +745,8 @@ fn backup_auth(home: &Path, retention: u32) -> Result<PathBuf> {
     let mut backups: Vec<PathBuf> = std::fs::read_dir(&bdir)?
         .filter_map(|e| e.ok())
         .filter(|e| e.file_name().to_string_lossy().starts_with("auth_"))
-        .map(|e| e.path()).collect();
+        .map(|e| e.path())
+        .collect();
     backups.sort();
     while backups.len() > retention as usize {
         let old = backups.remove(0);
@@ -566,9 +821,13 @@ pub fn detect_auth(home: &Path, names: &[String]) -> Result<CodexAuthStatus> {
 
     if !exists {
         return Ok(CodexAuthStatus {
-            codex_home: home_s, auth_path: ap_s, exists: false,
-            matched_account: None, sha256_prefix: None,
-            status: "missing".to_string(), warning: Some("auth.json 不存在".to_string()),
+            codex_home: home_s,
+            auth_path: ap_s,
+            exists: false,
+            matched_account: None,
+            sha256_prefix: None,
+            status: "missing".to_string(),
+            warning: Some("auth.json 不存在".to_string()),
         });
     }
 
@@ -580,11 +839,22 @@ pub fn detect_auth(home: &Path, names: &[String]) -> Result<CodexAuthStatus> {
     });
 
     Ok(CodexAuthStatus {
-        codex_home: home_s, auth_path: ap_s, exists: true,
+        codex_home: home_s,
+        auth_path: ap_s,
+        exists: true,
         matched_account: matched.cloned(),
         sha256_prefix: Some(prefix),
-        status: if matched.is_some() { "matched" } else { "unmatched" }.to_string(),
-        warning: if matched.is_none() { Some("当前 auth.json 与已保存账号均不匹配".to_string()) } else { None },
+        status: if matched.is_some() {
+            "matched"
+        } else {
+            "unmatched"
+        }
+        .to_string(),
+        warning: if matched.is_none() {
+            Some("当前 auth.json 与已保存账号均不匹配".to_string())
+        } else {
+            None
+        },
     })
 }
 
@@ -595,14 +865,20 @@ pub fn list_accounts(home: &Path) -> Result<Vec<AccountMeta>> {
     ensure_dir(&adir)?;
 
     let ap = auth_path(home);
-    let active_prefix = if ap.exists() { sha256_prefix(&ap).ok() } else { None };
+    let active_prefix = if ap.exists() {
+        sha256_prefix(&ap).ok()
+    } else {
+        None
+    };
     let priorities = load_priorities(home)?;
 
     let mut result = Vec::new();
     for entry in std::fs::read_dir(&adir)?.filter_map(|e| e.ok()) {
         let name = entry.file_name().to_string_lossy().to_string();
         let acc_auth = entry.path().join("auth.json");
-        if !acc_auth.exists() { continue; }
+        if !acc_auth.exists() {
+            continue;
+        }
 
         let prefix = sha256_prefix(&acc_auth)?;
         let size = file_size(&acc_auth)?;
@@ -617,28 +893,43 @@ pub fn list_accounts(home: &Path) -> Result<Vec<AccountMeta>> {
         let manual_override = meta.manual_subscription_override;
 
         let priority = priorities.get(&name).copied();
-        let subscription = manual_override.clone()
+        let subscription = manual_override
+            .clone()
             .map(manual_subscription)
             .or_else(|| detect_subscription_from_auth_file(&acc_auth).ok());
 
         result.push(AccountMeta {
-            name, note, created_at: created, updated_at: updated,
-            sha256_prefix: Some(prefix), size: Some(size),
-            is_active: Some(is_active), priority, subscription, usage: None,
-            last_usage_check_at: None, manual_subscription_override: manual_override,
+            name,
+            note,
+            created_at: created,
+            updated_at: updated,
+            sha256_prefix: Some(prefix),
+            size: Some(size),
+            is_active: Some(is_active),
+            priority,
+            subscription,
+            usage: None,
+            last_usage_check_at: None,
+            manual_subscription_override: manual_override,
             source: None,
         });
     }
 
     result.sort_by(|a, b| {
-        b.is_active.cmp(&a.is_active)
+        b.is_active
+            .cmp(&a.is_active)
             .then_with(|| b.priority.cmp(&a.priority))
             .then_with(|| a.name.cmp(&b.name))
     });
     Ok(result)
 }
 
-pub fn add_account(home: &Path, name: &str, note: Option<&str>, overwrite: bool) -> Result<AccountMeta> {
+pub fn add_account(
+    home: &Path,
+    name: &str,
+    note: Option<&str>,
+    overwrite: bool,
+) -> Result<AccountMeta> {
     let adir = accounts_dir(home);
     let acc_dir = adir.join(name);
 
@@ -667,11 +958,18 @@ pub fn add_account(home: &Path, name: &str, note: Option<&str>, overwrite: bool)
     let subscription = detect_subscription_from_auth_file(&dst).ok();
 
     Ok(AccountMeta {
-        name: name.to_string(), note: note.map(String::from),
-        created_at: now.clone(), updated_at: now,
-        sha256_prefix: Some(sha256_prefix(&dst)?), size: Some(file_size(&dst)?),
-        is_active: Some(true), priority: None, subscription, usage: None,
-        last_usage_check_at: None, manual_subscription_override: None,
+        name: name.to_string(),
+        note: note.map(String::from),
+        created_at: now.clone(),
+        updated_at: now,
+        sha256_prefix: Some(sha256_prefix(&dst)?),
+        size: Some(file_size(&dst)?),
+        is_active: Some(true),
+        priority: None,
+        subscription,
+        usage: None,
+        last_usage_check_at: None,
+        manual_subscription_override: None,
         source: None,
     })
 }
@@ -679,7 +977,9 @@ pub fn add_account(home: &Path, name: &str, note: Option<&str>, overwrite: bool)
 pub fn remove_account(home: &Path, name: &str, force: bool) -> Result<()> {
     let adir = accounts_dir(home);
     let acc_dir = adir.join(name);
-    if !acc_dir.exists() { return Err(anyhow::anyhow!("账号 '{}' 不存在", name)); }
+    if !acc_dir.exists() {
+        return Err(anyhow::anyhow!("账号 '{}' 不存在", name));
+    }
 
     // Check if active
     let acc_auth = acc_dir.join("auth.json");
@@ -700,8 +1000,12 @@ pub fn rename_account(home: &Path, old: &str, new: &str) -> Result<()> {
     let adir = accounts_dir(home);
     let old_dir = adir.join(old);
     let new_dir = adir.join(new);
-    if !old_dir.exists() { return Err(anyhow::anyhow!("账号 '{}' 不存在", old)); }
-    if new_dir.exists() { return Err(anyhow::anyhow!("账号 '{}' 已存在", new)); }
+    if !old_dir.exists() {
+        return Err(anyhow::anyhow!("账号 '{}' 不存在", old));
+    }
+    if new_dir.exists() {
+        return Err(anyhow::anyhow!("账号 '{}' 已存在", new));
+    }
     std::fs::rename(&old_dir, &new_dir)?;
 
     // Update meta.json
@@ -710,7 +1014,10 @@ pub fn rename_account(home: &Path, old: &str, new: &str) -> Result<()> {
         let mut m = read_json(&meta_path)?;
         if let Some(map) = m.as_object_mut() {
             map.insert("name".to_string(), Value::String(new.to_string()));
-            map.insert("updatedAt".to_string(), Value::String(Utc::now().to_rfc3339()));
+            map.insert(
+                "updatedAt".to_string(),
+                Value::String(Utc::now().to_rfc3339()),
+            );
         }
         write_json(&meta_path, &m)?;
     }
@@ -720,15 +1027,21 @@ pub fn rename_account(home: &Path, old: &str, new: &str) -> Result<()> {
 pub fn switch_account(home: &Path, name: &str) -> Result<()> {
     let adir = accounts_dir(home);
     let acc_dir = adir.join(name);
-    if !acc_dir.exists() { return Err(anyhow::anyhow!("账号 '{}' 不存在", name)); }
+    if !acc_dir.exists() {
+        return Err(anyhow::anyhow!("账号 '{}' 不存在", name));
+    }
     let acc_auth = acc_dir.join("auth.json");
-    if !acc_auth.exists() { return Err(anyhow::anyhow!("账号 '{}' 缺少 auth.json", name)); }
+    if !acc_auth.exists() {
+        return Err(anyhow::anyhow!("账号 '{}' 缺少 auth.json", name));
+    }
 
     close_codex_processes();
 
     // Backup then swap while Codex is not holding auth.json.
     let ap = auth_path(home);
-    if ap.exists() { backup_auth(home, 10)?; }
+    if ap.exists() {
+        backup_auth(home, 10)?;
+    }
     std::fs::copy(&acc_auth, &ap)?;
 
     reopen_codex_app();
@@ -739,7 +1052,9 @@ pub fn switch_account(home: &Path, name: &str) -> Result<()> {
 
 fn load_priorities(home: &Path) -> Result<std::collections::HashMap<String, bool>> {
     let pf = priority_file(home);
-    if !pf.exists() { return Ok(std::collections::HashMap::new()); }
+    if !pf.exists() {
+        return Ok(std::collections::HashMap::new());
+    }
     let val = read_json(&pf)?;
     let empty_map = serde_json::Map::new();
     let map = val.as_object().unwrap_or(&empty_map);
@@ -777,7 +1092,11 @@ pub fn detect_subscription_for_account(home: &Path, name: &str) -> Result<Subscr
     detect_subscription_from_auth_file(&acc_auth)
 }
 
-pub fn set_manual_subscription_override(home: &Path, name: &str, plan: SubscriptionPlan) -> Result<AccountMeta> {
+pub fn set_manual_subscription_override(
+    home: &Path,
+    name: &str,
+    plan: SubscriptionPlan,
+) -> Result<AccountMeta> {
     let acc_dir = accounts_dir(home).join(name);
     if !acc_dir.exists() {
         return Err(anyhow::anyhow!("账号 '{}' 不存在", name));
@@ -839,7 +1158,9 @@ pub async fn fetch_usage_for_account(home: &Path, name: &str) -> Result<CodexUsa
 
 pub fn load_settings(home: &Path) -> Result<AppSettings> {
     let sf = config_file(home);
-    if !sf.exists() { return Ok(AppSettings::default()); }
+    if !sf.exists() {
+        return Ok(AppSettings::default());
+    }
     let s = std::fs::read_to_string(&sf)?;
     let settings: AppSettings = serde_json::from_str(&s)?;
     Ok(settings)

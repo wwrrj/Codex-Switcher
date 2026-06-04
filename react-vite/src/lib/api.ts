@@ -1,5 +1,5 @@
 import { invoke } from '@tauri-apps/api/core'
-import type { AccountMeta, CodexAuthStatus, CodexUsageInfo, AppSettings, AppLog, AppState, SubscriptionInfo, SubscriptionPlan } from './types'
+import type { AccountMeta, CodexAuthStatus, CodexUsageInfo, AppSettings, AppLog, AppState, SubscriptionInfo, SubscriptionPlan, TokenUsageSummary } from './types'
 
 // ── Frontend-only log management ──
 
@@ -119,6 +119,12 @@ export async function refreshAllUsage(
 export async function openUsagePage(): Promise<void> {
   await invoke<void>('open_usage_page')
   addLog('info', '已打开 Codex Usage 页面')
+}
+
+export async function getTokenUsageSummary(): Promise<TokenUsageSummary> {
+  const summary = await invoke<TokenUsageSummary>('get_token_usage_summary')
+  addLog('success', `已统计 ${summary.tokenEvents} 条 token 事件`)
+  return summary
 }
 
 // ── Subscription detection (stub - will use account data from backend) ──

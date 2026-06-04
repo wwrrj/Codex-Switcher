@@ -102,6 +102,45 @@ pub struct CodexUsageInfo {
     pub subscription: Option<SubscriptionInfo>,
 }
 
+// ── Local token usage from Codex rollout files ──
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TokenUsageBreakdown {
+    #[serde(alias = "input_tokens")]
+    pub input_tokens: i64,
+    #[serde(alias = "cached_input_tokens")]
+    pub cached_input_tokens: i64,
+    #[serde(alias = "output_tokens")]
+    pub output_tokens: i64,
+    #[serde(alias = "reasoning_output_tokens")]
+    pub reasoning_output_tokens: i64,
+    #[serde(alias = "total_tokens")]
+    pub total_tokens: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TokenUsageDay {
+    pub date: String,
+    pub usage: TokenUsageBreakdown,
+    pub turns: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TokenUsageSummary {
+    pub fetched_at: String,
+    pub codex_home: String,
+    pub sessions_scanned: u32,
+    pub token_events: u32,
+    pub total: TokenUsageBreakdown,
+    pub today: TokenUsageBreakdown,
+    pub max_session_total: TokenUsageBreakdown,
+    pub days: Vec<TokenUsageDay>,
+    pub warning: Option<String>,
+}
+
 // ── Account & Auth ──
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

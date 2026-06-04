@@ -4,6 +4,8 @@ import UsageWindowCard from './UsageWindowCard'
 import RefreshAllProgress from './RefreshAllProgress'
 import SubscriptionBadge from './SubscriptionBadge'
 import AccountPool from './AccountPool'
+import UsageHeatmap from './UsageHeatmap'
+import TokenUsageCard from './TokenUsageCard'
 import { cn, formatDate, shortName } from '@/lib/utils'
 
 interface Props {
@@ -17,8 +19,11 @@ export default function MainArea({ onRename, onDelete, onAddAccount, onOpenSetti
   const activeAccount = useAppStore((s) => s.activeAccount)
   const accounts = useAppStore((s) => s.accounts)
   const isRefreshingAll = useAppStore((s) => s.isRefreshingAll)
+  const usageHistory = useAppStore((s) => s.usageHistory)
+  const tokenUsage = useAppStore((s) => s.tokenUsage)
   const refreshUsage = useAppStore((s) => s.refreshUsage)
   const refreshAllUsage = useAppStore((s) => s.refreshAllUsage)
+  const refreshTokenUsage = useAppStore((s) => s.refreshTokenUsage)
   const switchToAccount = useAppStore((s) => s.switchToAccount)
   const openSubDialog = useAppStore((s) => s.openSubscriptionOverrideDialog)
   const refreshAuth = useAppStore((s) => s.refreshAuth)
@@ -120,6 +125,10 @@ export default function MainArea({ onRename, onDelete, onAddAccount, onOpenSetti
             hint={autoTarget?.priority ? '优先账号' : '普通账号'}
           />
         </div>
+
+        <UsageHeatmap history={usageHistory} />
+
+        <TokenUsageCard summary={tokenUsage} onRefresh={refreshTokenUsage} />
 
         {isRefreshingAll && <RefreshAllProgress />}
 

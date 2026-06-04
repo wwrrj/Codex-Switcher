@@ -22,6 +22,41 @@ export interface CodexUsageInfo {
   subscription?: SubscriptionInfo;
 }
 
+export interface TokenUsageBreakdown {
+  inputTokens: number;
+  cachedInputTokens: number;
+  outputTokens: number;
+  reasoningOutputTokens: number;
+  totalTokens: number;
+}
+
+export interface TokenUsageDay {
+  date: string;
+  usage: TokenUsageBreakdown;
+  turns: number;
+}
+
+export interface TokenUsageSummary {
+  fetchedAt: string;
+  codexHome: string;
+  sessionsScanned: number;
+  tokenEvents: number;
+  total: TokenUsageBreakdown;
+  today: TokenUsageBreakdown;
+  maxSessionTotal: TokenUsageBreakdown;
+  days: TokenUsageDay[];
+  warning?: string;
+}
+
+export interface DailyUsageEntry {
+  date: string;
+  total: number;
+  samples: number;
+  maxFiveHourPercentage: number;
+  maxSevenDayPercentage: number;
+  accounts: Record<string, number>;
+}
+
 // ── Subscription types ──
 
 export type SubscriptionPlan =

@@ -20,7 +20,8 @@ pub fn get_app_state(custom_home: Option<String>) -> Result<AppState, String> {
 pub fn detect_codex_auth(custom_home: Option<String>) -> Result<CodexAuthStatus, String> {
     let home = core::codex_home(custom_home.as_deref()).map_err(|e| e.to_string())?;
     let settings = core::load_settings(&home).map_err(|e| e.to_string())?;
-    let actual_home = core::codex_home(settings.codex_home.as_deref()).map_err(|e| e.to_string())?;
+    let actual_home =
+        core::codex_home(settings.codex_home.as_deref()).map_err(|e| e.to_string())?;
     let accounts = core::list_accounts(&actual_home).map_err(|e| e.to_string())?;
     let names: Vec<String> = accounts.iter().map(|a| a.name.clone()).collect();
     core::detect_auth(&actual_home, &names).map_err(|e| e.to_string())
@@ -30,14 +31,25 @@ pub fn detect_codex_auth(custom_home: Option<String>) -> Result<CodexAuthStatus,
 pub fn list_accounts(custom_home: Option<String>) -> Result<Vec<AccountMeta>, String> {
     let home = core::codex_home(custom_home.as_deref()).map_err(|e| e.to_string())?;
     let settings = core::load_settings(&home).map_err(|e| e.to_string())?;
-    let actual_home = core::codex_home(settings.codex_home.as_deref()).map_err(|e| e.to_string())?;
+    let actual_home =
+        core::codex_home(settings.codex_home.as_deref()).map_err(|e| e.to_string())?;
     core::list_accounts(&actual_home).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-pub fn add_account(name: String, note: Option<String>, overwrite: Option<bool>) -> Result<AccountMeta, String> {
+pub fn add_account(
+    name: String,
+    note: Option<String>,
+    overwrite: Option<bool>,
+) -> Result<AccountMeta, String> {
     let actual_home = actual_home()?;
-    core::add_account(&actual_home, &name, note.as_deref(), overwrite.unwrap_or(false)).map_err(|e| e.to_string())
+    core::add_account(
+        &actual_home,
+        &name,
+        note.as_deref(),
+        overwrite.unwrap_or(false),
+    )
+    .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -66,7 +78,8 @@ pub fn toggle_priority(name: String) -> Result<bool, String> {
 
 #[tauri::command]
 pub fn update_settings(settings: AppSettings) -> Result<AppSettings, String> {
-    let actual_home = core::codex_home(settings.codex_home.as_deref()).map_err(|e| e.to_string())?;
+    let actual_home =
+        core::codex_home(settings.codex_home.as_deref()).map_err(|e| e.to_string())?;
     core::save_settings(&actual_home, &settings).map_err(|e| e.to_string())?;
     Ok(settings)
 }
@@ -90,7 +103,10 @@ pub fn detect_subscription_for_account(name: String) -> Result<SubscriptionInfo,
 }
 
 #[tauri::command]
-pub fn set_manual_subscription_override(name: String, plan: SubscriptionPlan) -> Result<AccountMeta, String> {
+pub fn set_manual_subscription_override(
+    name: String,
+    plan: SubscriptionPlan,
+) -> Result<AccountMeta, String> {
     let actual_home = actual_home()?;
     core::set_manual_subscription_override(&actual_home, &name, plan).map_err(|e| e.to_string())
 }
@@ -118,13 +134,17 @@ pub async fn fetch_usage_for_account(name: String) -> Result<CodexUsageInfo, Str
 }
 
 #[tauri::command]
+pub fn get_token_usage_summary() -> Result<TokenUsageSummary, String> {
+    let actual_home = actual_home()?;
+    core::get_token_usage_summary(&actual_home).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 pub fn open_usage_page() -> Result<(), String> {
     let url = "https://chatgpt.com/account/usage";
 
     #[cfg(target_os = "windows")]
-    let status = Command::new("cmd")
-        .args(["/C", "start", "", url])
-        .status();
+    let status = Command::new("cmd").args(["/C", "start", "", url]).status();
 
     #[cfg(target_os = "macos")]
     let status = Command::new("open").arg(url).status();
@@ -132,9 +152,13 @@ pub fn open_usage_page() -> Result<(), String> {
     #[cfg(all(unix, not(target_os = "macos")))]
     let status = Command::new("xdg-open").arg(url).status();
 
-    status
-        .map_err(|e| e.to_string())
-        .and_then(|s| if s.success() { Ok(()) } else { Err("打开 Usage 页面失败".to_string()) })
+    status.map_err(|e| e.to_string()).and_then(|s| {
+        if s.success() {
+            Ok(())
+        } else {
+            Err("打开 Usage 页面失败".to_string())
+        }
+    })
 }
 
 #[tauri::command]
