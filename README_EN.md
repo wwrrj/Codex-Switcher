@@ -45,6 +45,9 @@ Manually signing out, signing in, and checking usage interrupts your workflow wh
 | Local token statistics | ✅ | Counts input, cached input, output, and reasoning tokens from local sessions |
 | Usage analytics | ✅ | Daily heatmap, today's tokens, lifetime tokens, and a dynamic 14-day chart |
 | Backups and settings | ✅ | Custom Codex Home, backup retention, refresh interval, and light/dark themes |
+| Smart switching and health checks | ✅ | Recommends accounts using health, priority, and remaining usage |
+| System tray and usage alerts | ✅ | Runs in the tray, provides quick switching, and notifies at usage thresholds |
+| Switch history | ✅ | Records source, destination, time, and result for account switches |
 
 ## Quick Start
 

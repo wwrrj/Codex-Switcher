@@ -1,5 +1,6 @@
-import { RefreshCw, ArrowRightLeft, Pencil, Trash2, ExternalLink, AlertTriangle, Key, CheckCircle2, Calendar, Clock, Users, Activity, Star, Plus } from 'lucide-react'
+import { RefreshCw, ArrowRightLeft, Pencil, Trash2, ExternalLink, AlertTriangle, Key, CheckCircle2, Calendar, Clock, Users, Activity, Star, Plus, ShieldCheck, ShieldAlert, History } from 'lucide-react'
 import { useAppStore } from '@/store/appStore'
+import { getSmartSwitchRecommendation } from '@/lib/api'
 import UsageWindowCard from './UsageWindowCard'
 import RefreshAllProgress from './RefreshAllProgress'
 import SubscriptionBadge from './SubscriptionBadge'
@@ -24,6 +25,7 @@ export default function MainArea({ onRename, onDelete, onAddAccount }: Props) {
   const switchToAccount = useAppStore((s) => s.switchToAccount)
   const openSubDialog = useAppStore((s) => s.openSubscriptionOverrideDialog)
   const refreshAuth = useAppStore((s) => s.refreshAuth)
+  const switchHistory = useAppStore((s) => s.switchHistory)
 
   const account = accounts.find((a) => a.name === activeAccount) ?? null
   const hasAccount = account !== null
@@ -45,13 +47,10 @@ export default function MainArea({ onRename, onDelete, onAddAccount }: Props) {
   const avgUsage5h = totalAccounts > 0 ? Math.round(poolUsage5h / totalAccounts) : 0
   const priorityCount = accounts.filter((a) => a.priority).length
 
-  // Auto-switch recommendation — prefer priority accounts
-  const priorityAccounts = accounts.filter((a) => !a.isActive && a.priority)
-  const candidates = priorityAccounts.length > 0 ? priorityAccounts : accounts.filter((a) => !a.isActive)
-  const autoTarget = candidates.find((a) => {
-    const u = a.usage?.windows.find((w) => w.window === '5h')
-    return !u || (u.percentage != null && u.percentage < 90)
-  }) ?? candidates[0]
+  const recommendation = getSmartSwitchRecommendation(accounts)
+  const autoTarget = recommendation?.account ?? null
+  const health = account?.health ?? 'invalid'
+  const healthHealthy = health === 'healthy'
 
   return (
     <main data-component="MainArea" className="flex-1 overflow-y-auto min-w-0">
@@ -184,6 +183,25 @@ export default function MainArea({ onRename, onDelete, onAddAccount }: Props) {
                 </div>
               )}
 
+              <div className={cn(
+                'rounded-lg border p-2.5',
+                healthHealthy ? 'border-success/20 bg-success-muted' : 'border-warning/30 bg-warning-muted'
+              )}>
+                <div className="flex items-start gap-2">
+                  {healthHealthy
+                    ? <ShieldCheck className="w-3.5 h-3.5 text-success mt-0.5 shrink-0" />
+                    : <ShieldAlert className="w-3.5 h-3.5 text-warning mt-0.5 shrink-0" />}
+                  <div>
+                    <p className={cn('text-[11px] font-medium', healthHealthy ? 'text-success' : 'text-warning')}>
+                      {healthHealthy ? '账号状态正常' : health === 'expiring_soon' ? '认证即将过期' : health === 'expired' ? '认证已过期' : '认证文件异常'}
+                    </p>
+                    <p className="text-[10px] text-fg-subtle mt-0.5">
+                      {account.healthMessage ?? '认证文件有效，可以正常查询与切换'}
+                    </p>
+                  </div>
+                </div>
+              </div>
+
               {/* Account metadata */}
               <div className="rounded-lg bg-bg-elevated/60 border border-line-subtle p-2.5 space-y-1">
                 <MetaRow icon={<Calendar className="w-3 h-3" />} label="创建时间" value={formatDate(account.createdAt)} />
@@ -264,6 +282,50 @@ export default function MainArea({ onRename, onDelete, onAddAccount }: Props) {
                 <UsageWindowCard windowData={windows5h} label="5 小时窗口" />
                 <UsageWindowCard windowData={windows7d} label="7 天窗口" />
               </div>
+            )}
+          </div>
+        </div>
+
+        <div className="grid grid-cols-5 gap-4">
+          <div className="col-span-2 rounded-xl border border-line bg-bg-surface card-ring p-4">
+            <div className="flex items-center gap-2 mb-3">
+              <ArrowRightLeft className="w-3.5 h-3.5 text-primary" />
+              <h2 className="text-sm font-semibold text-fg font-serif">智能切换推荐</h2>
+            </div>
+            {recommendation ? (
+              <>
+                <p className="text-sm font-medium text-fg truncate" title={recommendation.account.name}>{recommendation.account.name}</p>
+                <p className="text-[11px] text-fg-subtle mt-1">{recommendation.reason}</p>
+                <button
+                  onClick={() => switchToAccount(recommendation.account.name)}
+                  disabled={switchingAccount !== null || isRefreshingAll}
+                  className="mt-3 flex items-center gap-1.5 px-3 py-1.5 rounded-md text-[11px] font-medium text-white bg-primary hover:bg-primary-hover disabled:opacity-50"
+                >
+                  <ArrowRightLeft className="w-3 h-3" />
+                  切换到推荐账号
+                </button>
+              </>
+            ) : (
+              <p className="text-[11px] text-fg-subtle">没有其他健康账号可供推荐。</p>
+            )}
+          </div>
+          <div className="col-span-3 rounded-xl border border-line bg-bg-surface card-ring p-4">
+            <div className="flex items-center gap-2 mb-3">
+              <History className="w-3.5 h-3.5 text-fg-muted" />
+              <h2 className="text-sm font-semibold text-fg font-serif">最近切换</h2>
+            </div>
+            {switchHistory.length > 0 ? (
+              <div className="space-y-2">
+                {switchHistory.slice(0, 3).map((entry) => (
+                  <div key={entry.id} className="flex items-center gap-2 text-[11px]">
+                    <span className={cn('w-1.5 h-1.5 rounded-full shrink-0', entry.success ? 'bg-success' : 'bg-danger')} />
+                    <span className="text-fg-muted truncate min-w-0">{entry.fromAccount ?? '未知账号'} → {entry.toAccount}</span>
+                    <span className="text-fg-subtle ml-auto shrink-0">{formatDate(entry.switchedAt)}</span>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="text-[11px] text-fg-subtle">还没有账号切换记录。</p>
             )}
           </div>
         </div>

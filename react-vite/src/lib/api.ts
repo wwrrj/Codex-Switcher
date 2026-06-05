@@ -1,5 +1,6 @@
 import { invoke } from '@tauri-apps/api/core'
-import type { AccountMeta, CodexAuthStatus, CodexUsageInfo, AppSettings, AppLog, AppState, SubscriptionInfo, SubscriptionPlan, TokenUsageSummary, NewAccountLoginPreparation } from './types'
+import { isPermissionGranted, requestPermission, sendNotification } from '@tauri-apps/plugin-notification'
+import type { AccountMeta, CodexAuthStatus, CodexUsageInfo, AppSettings, AppLog, AppState, SubscriptionInfo, SubscriptionPlan, TokenUsageSummary, NewAccountLoginPreparation, SwitchHistoryEntry, SwitchRecommendation } from './types'
 
 // ── Frontend-only log management ──
 
@@ -60,6 +61,14 @@ export async function listAccounts(): Promise<AccountMeta[]> {
 export async function switchAccount(name: string): Promise<void> {
   await invoke<void>('switch_account', { name })
   addLog('success', `已切换到账号「${name}」`)
+}
+
+export async function getSwitchHistory(): Promise<SwitchHistoryEntry[]> {
+  return await invoke<SwitchHistoryEntry[]>('get_switch_history')
+}
+
+export async function refreshTrayMenu(): Promise<void> {
+  await invoke<void>('refresh_tray_menu')
 }
 
 export async function saveActiveAccount(): Promise<string> {
@@ -173,15 +182,46 @@ export async function clearManualSubscriptionOverride(
 // ── Auto-switch target (frontend-only computation) ──
 
 export function getAutoSwitchTarget(accounts: AccountMeta[]): AccountMeta | null {
-  const priorityAccounts = [...accounts]
-    .filter((a) => !a.isActive && a.priority)
-  const candidates = priorityAccounts.length > 0 ? priorityAccounts : accounts.filter((a) => !a.isActive)
-  const sorted = candidates.sort((a, b) => a.name.localeCompare(b.name))
-  for (const acc of sorted) {
-    const usage5h = acc.usage?.windows.find((w) => w.window === '5h')
-    if (!usage5h || (usage5h.percentage != null && usage5h.percentage < 90)) {
-      return acc
+  return getSmartSwitchRecommendation(accounts)?.account ?? null
+}
+
+export function getSmartSwitchRecommendation(accounts: AccountMeta[]): SwitchRecommendation | null {
+  const candidates = accounts.filter((account) => !account.isActive && account.health !== 'expired' && account.health !== 'invalid')
+  const scored = candidates.map((account) => {
+    const fiveHour = account.usage?.windows.find((window) => window.window === '5h')?.percentage
+    const sevenDay = account.usage?.windows.find((window) => window.window === '7d')?.percentage
+    const usagePenalty = (fiveHour ?? 35) * 0.65 + (sevenDay ?? 35) * 0.35
+    const priorityBonus = account.priority ? 18 : 0
+    const healthPenalty = account.health === 'expiring_soon' ? 20 : 0
+    const score = Math.round(100 - usagePenalty + priorityBonus - healthPenalty)
+    const reason = account.priority
+      ? `优先账号，5h 剩余 ${fiveHour == null ? '未知' : `${Math.max(0, 100 - fiveHour)}%`}`
+      : fiveHour == null
+        ? '账号健康，等待首次用量查询'
+        : `综合剩余额度最佳，5h 剩余 ${Math.max(0, 100 - fiveHour)}%`
+    return { account, score, reason }
+  })
+  return scored.sort((a, b) => b.score - a.score || a.account.name.localeCompare(b.account.name))[0] ?? null
+}
+
+export async function notifyUsageThreshold(usages: CodexUsageInfo[], settings: AppSettings): Promise<void> {
+  if (!settings.enableUsageNotifications) return
+  let granted = await isPermissionGranted()
+  if (!granted) granted = await requestPermission() === 'granted'
+  if (!granted) return
+
+  const threshold = Math.min(100, Math.max(1, settings.usageNotificationThreshold))
+  for (const usage of usages) {
+    for (const usageWindow of usage.windows) {
+      const percentage = usageWindow.percentage ?? 0
+      if (percentage < threshold) continue
+      const key = `codex-switcher:usage-alert:${usage.accountName}:${usageWindow.window}:${threshold}:${usageWindow.resetAt ?? 'unknown'}`
+      if (window.localStorage.getItem(key)) continue
+      sendNotification({
+        title: `${usage.accountName} 用量提醒`,
+        body: `${usageWindow.window} 窗口已使用 ${Math.round(percentage)}%，建议切换到剩余额度更多的账号。`,
+      })
+      window.localStorage.setItem(key, new Date().toISOString())
     }
   }
-  return sorted[0] ?? null
 }

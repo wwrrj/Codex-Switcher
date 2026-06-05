@@ -151,6 +151,26 @@ pub struct NewAccountLoginPreparation {
 
 // ── Account & Auth ──
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum AccountHealth {
+    Healthy,
+    ExpiringSoon,
+    Expired,
+    Invalid,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SwitchHistoryEntry {
+    pub id: String,
+    pub switched_at: String,
+    pub from_account: Option<String>,
+    pub to_account: String,
+    pub success: bool,
+    pub error: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AccountMeta {
@@ -167,6 +187,8 @@ pub struct AccountMeta {
     pub subscription: Option<SubscriptionInfo>,
     pub manual_subscription_override: Option<SubscriptionPlan>,
     pub priority: Option<bool>,
+    pub health: AccountHealth,
+    pub health_message: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -213,11 +235,21 @@ pub struct AppSettings {
     pub restore_previous_after_usage_check: bool,
     pub backup_retention: u32,
     pub enable_usage_query: bool,
+    #[serde(default = "default_true")]
+    pub enable_usage_notifications: bool,
+    #[serde(default = "default_usage_notification_threshold")]
+    pub usage_notification_threshold: u32,
     pub theme: String,
 }
 
 fn default_refresh_usage_interval_minutes() -> u32 {
     15
+}
+fn default_true() -> bool {
+    true
+}
+fn default_usage_notification_threshold() -> u32 {
+    80
 }
 
 impl Default for AppSettings {
@@ -231,6 +263,8 @@ impl Default for AppSettings {
             restore_previous_after_usage_check: true,
             backup_retention: 10,
             enable_usage_query: true,
+            enable_usage_notifications: true,
+            usage_notification_threshold: default_usage_notification_threshold(),
             theme: "dark".to_string(),
         }
     }
@@ -244,6 +278,7 @@ pub struct AppState {
     pub accounts: Vec<AccountMeta>,
     pub logs: Vec<AppLog>,
     pub settings: AppSettings,
+    pub switch_history: Vec<SwitchHistoryEntry>,
 }
 
 // ── Account metadata file (stored alongside auth.json) ──

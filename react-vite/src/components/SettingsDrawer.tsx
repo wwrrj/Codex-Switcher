@@ -12,6 +12,8 @@ const defaultSettings: AppSettings = {
   restorePreviousAfterUsageCheck: true,
   backupRetention: 10,
   enableUsageQuery: true,
+  enableUsageNotifications: true,
+  usageNotificationThreshold: 80,
   theme: 'dark',
 }
 
@@ -107,6 +109,25 @@ export default function SettingsDrawer({ open, onClose }: Props) {
               checked={form.enableUsageQuery}
               onChange={(v) => setForm({ ...form, enableUsageQuery: v })}
             />
+            <ToggleRow
+              label="用量达到阈值时发送系统通知"
+              checked={form.enableUsageNotifications}
+              onChange={(v) => setForm({ ...form, enableUsageNotifications: v })}
+            />
+          </FieldGroup>
+
+          <FieldGroup label="用量通知阈值">
+            <div className="flex items-center gap-2">
+              <input
+                type="number"
+                min={1}
+                max={100}
+                value={form.usageNotificationThreshold}
+                onChange={(e) => setForm({ ...form, usageNotificationThreshold: Math.min(100, Math.max(1, parseInt(e.target.value) || 80)) })}
+                className="w-20 px-2.5 py-1.5 rounded-md text-xs bg-bg border border-line text-fg focus:border-primary focus:outline-none"
+              />
+              <span className="text-xs text-fg-subtle">% 已使用</span>
+            </div>
           </FieldGroup>
 
           {/* Usage refresh interval */}

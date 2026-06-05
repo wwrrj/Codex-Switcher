@@ -112,6 +112,23 @@ export interface AccountMeta {
   subscription?: SubscriptionInfo;
   manualSubscriptionOverride?: SubscriptionPlan;
   priority?: boolean;
+  health: "healthy" | "expiring_soon" | "expired" | "invalid";
+  healthMessage?: string;
+}
+
+export interface SwitchHistoryEntry {
+  id: string;
+  switchedAt: string;
+  fromAccount?: string;
+  toAccount: string;
+  success: boolean;
+  error?: string;
+}
+
+export interface SwitchRecommendation {
+  account: AccountMeta;
+  score: number;
+  reason: string;
 }
 
 export interface CodexAuthStatus {
@@ -140,6 +157,8 @@ export interface AppSettings {
   restorePreviousAfterUsageCheck: boolean;
   backupRetention: number;
   enableUsageQuery: boolean;
+  enableUsageNotifications: boolean;
+  usageNotificationThreshold: number;
   theme: "system" | "light" | "dark";
 }
 
@@ -150,6 +169,7 @@ export interface AppState {
   accounts: AccountMeta[];
   logs: AppLog[];
   settings: AppSettings;
+  switchHistory: SwitchHistoryEntry[];
 }
 
 export interface RefreshProgress {

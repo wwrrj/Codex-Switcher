@@ -71,3 +71,13 @@ export function shortName(name: string, maxLen = 18): string {
   if (local.length <= maxLen) return local
   return local.slice(0, maxLen - 1) + '…'
 }
+
+export function shortPath(path: string, maxLen = 42): string {
+  if (path.length <= maxLen) return path
+  const parts = path.split(/[\\/]/).filter(Boolean)
+  const file = parts[parts.length - 1] ?? path
+  const parent = parts[parts.length - 2]
+  const compact = parent ? `…/${parent}/${file}` : `…/${file}`
+  if (compact.length <= maxLen) return compact
+  return `…${path.slice(-(maxLen - 1))}`
+}

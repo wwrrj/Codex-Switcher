@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback } from 'react'
+import { listen } from '@tauri-apps/api/event'
 import { useAppStore } from '@/store/appStore'
-import TopBar from '@/components/TopBar'
+import TitleBar from '@/components/TitleBar'
 import AppSidebar, { type AppPage } from '@/components/AppSidebar'
 import MainArea from '@/components/MainArea'
 import UsageAnalyticsPage from '@/components/UsageAnalyticsPage'
@@ -14,11 +15,8 @@ import ToastContainer from '@/components/ToastContainer'
 export default function App() {
   const init = useAppStore((s) => s.init)
   const activeAccount = useAppStore((s) => s.activeAccount)
-  const accountCount = useAppStore((s) => s.accounts.length)
-  const enableUsageQuery = useAppStore((s) => s.settings.enableUsageQuery)
-  const refreshUsageIntervalMinutes = useAppStore((s) => s.settings.refreshUsageIntervalMinutes)
   const refreshAllUsage = useAppStore((s) => s.refreshAllUsage)
-  const refreshTokenUsage = useAppStore((s) => s.refreshTokenUsage)
+  const addToast = useAppStore((s) => s.addToast)
 
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
@@ -32,30 +30,20 @@ export default function App() {
   }, [init])
 
   useEffect(() => {
-    if (!enableUsageQuery || accountCount === 0) return
-
-    const intervalMs = Math.max(1, refreshUsageIntervalMinutes || 15) * 60_000
-    const timer = window.setInterval(() => {
-      void refreshAllUsage(true)
-    }, intervalMs)
-
-    return () => window.clearInterval(timer)
-  }, [accountCount, enableUsageQuery, refreshAllUsage, refreshUsageIntervalMinutes])
-
-  useEffect(() => {
-    const refreshCurrentTokenUsage = () => {
-      if (document.visibilityState === 'visible') void refreshTokenUsage()
-    }
-    const timer = window.setInterval(refreshCurrentTokenUsage, 60_000)
-    window.addEventListener('focus', refreshCurrentTokenUsage)
-    document.addEventListener('visibilitychange', refreshCurrentTokenUsage)
-
+    const unlistenRefresh = listen('tray-refresh-usage', () => void refreshAllUsage())
+    const unlistenSwitch = listen<{ name: string; success: boolean; error?: string }>('tray-account-switched', (event) => {
+      if (event.payload.success) {
+        void init()
+        addToast('success', `已从托盘切换到账号「${event.payload.name}」`)
+      } else {
+        addToast('error', event.payload.error ?? '托盘切换账号失败')
+      }
+    })
     return () => {
-      window.clearInterval(timer)
-      window.removeEventListener('focus', refreshCurrentTokenUsage)
-      document.removeEventListener('visibilitychange', refreshCurrentTokenUsage)
+      void unlistenRefresh.then((dispose) => dispose())
+      void unlistenSwitch.then((dispose) => dispose())
     }
-  }, [refreshTokenUsage])
+  }, [addToast, init, refreshAllUsage])
 
   const handleDelete = useCallback(() => {
     const active = useAppStore.getState().activeAccount
@@ -70,9 +58,10 @@ export default function App() {
       className="h-screen flex flex-col bg-bg text-fg overflow-hidden"
       style={{ minWidth: 800, minHeight: 600 }}
     >
-      <TopBar
+      <TitleBar
         sidebarCollapsed={sidebarCollapsed}
         onToggleSidebar={() => setSidebarCollapsed((value) => !value)}
+        onOpenSettings={() => setSettingsOpen(true)}
       />
 
       <div className="flex flex-1 min-h-0">

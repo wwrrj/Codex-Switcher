@@ -51,6 +51,9 @@ fn config_file(home: &Path) -> PathBuf {
 fn priority_file(home: &Path) -> PathBuf {
     config_dir(home).join("priorities.json")
 }
+fn switch_history_file(home: &Path) -> PathBuf {
+    config_dir(home).join("switch_history.json")
+}
 fn sessions_dir(home: &Path) -> PathBuf {
     home.join("sessions")
 }
@@ -87,6 +90,66 @@ fn ensure_dir(path: &Path) -> Result<()> {
         std::fs::create_dir_all(path)?;
     }
     Ok(())
+}
+
+fn account_health(auth_file: &Path) -> (AccountHealth, Option<String>) {
+    let auth_json = match read_json(auth_file) {
+        Ok(value) => value,
+        Err(error) => return (AccountHealth::Invalid, Some(error.to_string())),
+    };
+    let Some(token) = find_token(&auth_json) else {
+        return (
+            AccountHealth::Healthy,
+            Some("认证文件有效，但没有可校验到期时间的 ID Token".to_string()),
+        );
+    };
+    let Some(payload) = decode_jwt_payload(&token) else {
+        return (AccountHealth::Invalid, Some("无法解析 ID Token".to_string()));
+    };
+    let Some(expires_at) = payload.get("exp").and_then(Value::as_i64) else {
+        return (AccountHealth::Healthy, None);
+    };
+    let remaining = expires_at - Utc::now().timestamp();
+    if remaining <= 0 {
+        let has_refresh_token = string_at_path(&auth_json, &["tokens", "refresh_token"])
+            .or_else(|| string_at_path(&auth_json, &["refresh_token"]))
+            .is_some();
+        if has_refresh_token {
+            (
+                AccountHealth::Healthy,
+                Some("ID Token 已过期，Codex 可使用 Refresh Token 自动续期".to_string()),
+            )
+        } else {
+            (AccountHealth::Expired, Some("认证已过期，需要重新登录".to_string()))
+        }
+    } else if remaining <= 24 * 60 * 60 {
+        (
+            AccountHealth::ExpiringSoon,
+            Some("认证将在 24 小时内过期".to_string()),
+        )
+    } else {
+        (AccountHealth::Healthy, None)
+    }
+}
+
+fn append_switch_history(home: &Path, entry: SwitchHistoryEntry) -> Result<()> {
+    ensure_dir(&config_dir(home))?;
+    let mut entries = get_switch_history(home).unwrap_or_default();
+    entries.insert(0, entry);
+    entries.truncate(100);
+    std::fs::write(
+        switch_history_file(home),
+        serde_json::to_string_pretty(&entries)?,
+    )?;
+    Ok(())
+}
+
+pub fn get_switch_history(home: &Path) -> Result<Vec<SwitchHistoryEntry>> {
+    let path = switch_history_file(home);
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    Ok(serde_json::from_str(&std::fs::read_to_string(path)?)?)
 }
 
 fn display_name_for_plan(plan: &SubscriptionPlan) -> String {
@@ -920,6 +983,7 @@ pub fn list_accounts(home: &Path) -> Result<Vec<AccountMeta>> {
             .clone()
             .map(manual_subscription)
             .or_else(|| detect_subscription_from_auth_file(&acc_auth).ok());
+        let (health, health_message) = account_health(&acc_auth);
 
         result.push(AccountMeta {
             name,
@@ -935,6 +999,8 @@ pub fn list_accounts(home: &Path) -> Result<Vec<AccountMeta>> {
             last_usage_check_at: None,
             manual_subscription_override: manual_override,
             source: None,
+            health,
+            health_message,
         });
     }
 
@@ -979,6 +1045,7 @@ pub fn add_account(
     };
     write_account_meta_file(&acc_dir.join("meta.json"), &meta)?;
     let subscription = detect_subscription_from_auth_file(&dst).ok();
+    let (health, health_message) = account_health(&dst);
 
     Ok(AccountMeta {
         name: name.to_string(),
@@ -994,6 +1061,8 @@ pub fn add_account(
         last_usage_check_at: None,
         manual_subscription_override: None,
         source: None,
+        health,
+        health_message,
     })
 }
 
@@ -1084,6 +1153,25 @@ pub fn rename_account(home: &Path, old: &str, new: &str) -> Result<()> {
 }
 
 pub fn switch_account(home: &Path, name: &str) -> Result<()> {
+    let accounts = list_accounts(home)?;
+    let from_account = accounts
+        .iter()
+        .find(|account| account.is_active == Some(true))
+        .map(|account| account.name.clone());
+    let result = switch_account_inner(home, name);
+    let entry = SwitchHistoryEntry {
+        id: format!("{}-{}", Utc::now().timestamp_millis(), name),
+        switched_at: Utc::now().to_rfc3339(),
+        from_account,
+        to_account: name.to_string(),
+        success: result.is_ok(),
+        error: result.as_ref().err().map(ToString::to_string),
+    };
+    let _ = append_switch_history(home, entry);
+    result
+}
+
+fn switch_account_inner(home: &Path, name: &str) -> Result<()> {
     let adir = accounts_dir(home);
     let acc_dir = adir.join(name);
     if !acc_dir.exists() {
@@ -1249,5 +1337,6 @@ pub fn get_app_state(custom_home: Option<&str>) -> Result<AppState> {
         accounts,
         logs: Vec::new(), // Logs are ephemeral, populated at runtime
         settings,
+        switch_history: get_switch_history(&actual_home).unwrap_or_default(),
     })
 }

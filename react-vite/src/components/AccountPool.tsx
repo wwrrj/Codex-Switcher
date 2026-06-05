@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react'
-import { Plus, Users, Star, RefreshCw } from 'lucide-react'
+import { Plus, Users, Star, RefreshCw, ShieldAlert } from 'lucide-react'
 import { useAppStore } from '@/store/appStore'
 import { cn, shortName } from '@/lib/utils'
 import SubscriptionBadge from './SubscriptionBadge'
@@ -131,6 +131,11 @@ export default function AccountPool({ onAddAccount }: Props) {
                     {isActive && (
                       <span className="text-[9px] text-primary font-medium uppercase tracking-wider shrink-0 ml-auto">
                         当前
+                      </span>
+                    )}
+                    {(acc.health === 'expired' || acc.health === 'invalid' || acc.health === 'expiring_soon') && (
+                      <span title={acc.healthMessage ?? '账号健康状态异常'}>
+                        <ShieldAlert className="w-3 h-3 text-warning shrink-0" />
                       </span>
                     )}
                   </div>

@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { AccountMeta, CodexAuthStatus, AppLog, AppSettings, RefreshProgress, ToastItem, SubscriptionPlan, CodexUsageInfo, DailyUsageEntry, TokenUsageSummary } from '@/lib/types'
+import type { AccountMeta, CodexAuthStatus, AppLog, AppSettings, RefreshProgress, ToastItem, SubscriptionPlan, CodexUsageInfo, DailyUsageEntry, TokenUsageSummary, SwitchHistoryEntry } from '@/lib/types'
 import * as api from '@/lib/api'
 
 const USAGE_HISTORY_KEY = 'codex-switcher:daily-usage-history:v1'
@@ -91,6 +91,7 @@ interface AppStore {
   subscriptionOverrideTarget: string | null
   usageHistory: DailyUsageEntry[]
   tokenUsage: TokenUsageSummary | null
+  switchHistory: SwitchHistoryEntry[]
 
   init: () => Promise<void>
   selectAccount: (name: string) => void
@@ -116,6 +117,7 @@ interface AppStore {
   togglePriority: (name: string) => Promise<void>
   recordUsageSnapshot: (usage: CodexUsageInfo) => void
   refreshTokenUsage: () => Promise<void>
+  refreshSwitchHistory: () => Promise<void>
 }
 
 export const useAppStore = create<AppStore>((set, get) => ({
@@ -132,6 +134,8 @@ export const useAppStore = create<AppStore>((set, get) => ({
     restorePreviousAfterUsageCheck: true,
     backupRetention: 10,
     enableUsageQuery: true,
+    enableUsageNotifications: true,
+    usageNotificationThreshold: 80,
     theme: 'dark',
   },
   theme: 'dark',
@@ -147,6 +151,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
   subscriptionOverrideTarget: null,
   usageHistory: loadUsageHistory(),
   tokenUsage: null,
+  switchHistory: [],
 
   init: async () => {
     set({ loading: true })
@@ -160,13 +165,10 @@ export const useAppStore = create<AppStore>((set, get) => ({
         logs: state.logs,
         settings: state.settings,
         theme: state.settings.theme,
+        switchHistory: state.switchHistory,
         loading: false,
       })
       get().applyTheme(state.settings.theme)
-      void get().refreshTokenUsage()
-      if (state.settings.enableUsageQuery && state.settings.refreshUsageOnStartup && state.accounts.length > 0) {
-        void get().refreshAllUsage(true)
-      }
     } catch (e: unknown) {
       set({ loading: false })
       get().addToast('error', e instanceof Error ? e.message : '初始化失败')
@@ -190,11 +192,9 @@ export const useAppStore = create<AppStore>((set, get) => ({
         logs: api.getLogs(),
         switchTarget: null,
       })
+      void api.refreshTrayMenu()
+      void get().refreshSwitchHistory()
       get().addToast('success', `已切换到账号「${name}」`)
-      void get().refreshTokenUsage()
-      if (get().settings.enableUsageQuery && get().settings.refreshUsageAfterSwitch) {
-        void get().refreshUsage(name)
-      }
     } catch (e: unknown) {
       get().addToast('error', e instanceof Error ? e.message : '切换失败')
     } finally {
@@ -209,11 +209,8 @@ export const useAppStore = create<AppStore>((set, get) => ({
       const active = accounts.find((account) => account.isActive)?.name ?? name
       const authStatus = await api.detectCodexAuth()
       set({ accounts, authStatus, activeAccount: active, selectedAccount: active, logs: api.getLogs() })
+      void api.refreshTrayMenu()
       get().addToast('success', `已添加账号「${name}」`)
-      void get().refreshTokenUsage()
-      if (get().settings.enableUsageQuery) {
-        void get().refreshUsage(name)
-      }
     } catch (e: unknown) {
       throw e
     }
@@ -229,6 +226,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
         logs: api.getLogs(),
         selectedAccount: state.selectedAccount === name ? null : state.selectedAccount,
       })
+      void api.refreshTrayMenu()
       get().addToast('success', `已删除账号「${name}」`)
     } catch (e: unknown) {
       get().addToast('error', e instanceof Error ? e.message : '删除失败')
@@ -246,6 +244,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
         activeAccount: state.activeAccount === oldName ? newName : state.activeAccount,
         selectedAccount: state.selectedAccount === oldName ? newName : state.selectedAccount,
       })
+      void api.refreshTrayMenu()
     } catch (e: unknown) {
       get().addToast('error', e instanceof Error ? e.message : '重命名失败')
       throw e
@@ -290,7 +289,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
       )
       get().recordUsageSnapshot(usage)
       set({ accounts, logs: api.getLogs() })
-      void get().refreshTokenUsage()
+      void api.notifyUsageThreshold([usage], get().settings)
     } catch (e: unknown) {
       get().addToast('error', e instanceof Error ? e.message : '查询失败')
     } finally {
@@ -336,7 +335,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
           done: true,
         },
       })
-      void get().refreshTokenUsage()
+      void api.notifyUsageThreshold(usages, get().settings)
       if (!silent) setTimeout(() => set({ refreshProgress: null }), 4000)
     } catch (e: unknown) {
       set({ isRefreshingAll: false, refreshProgress: null })
@@ -432,6 +431,14 @@ export const useAppStore = create<AppStore>((set, get) => ({
       get().addToast('error', e instanceof Error ? e.message : 'Token 统计失败')
     } finally {
       set({ isRefreshingTokenUsage: false })
+    }
+  },
+
+  refreshSwitchHistory: async () => {
+    try {
+      set({ switchHistory: await api.getSwitchHistory() })
+    } catch {
+      // History is supplemental and must not interrupt account operations.
     }
   },
 

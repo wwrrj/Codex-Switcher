@@ -1,12 +1,23 @@
 mod commands;
 mod core;
 mod models;
+mod tray;
 
 use commands::*;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .setup(|app| {
+            tray::setup(app)?;
+            Ok(())
+        })
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                api.prevent_close();
+                let _ = window.hide();
+            }
+        })
         .plugin(
             tauri_plugin_log::Builder::default()
                 .level(log::LevelFilter::Info)
@@ -14,6 +25,7 @@ pub fn run() {
         )
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_notification::init())
         .invoke_handler(tauri::generate_handler![
             get_app_state,
             detect_codex_auth,
@@ -23,6 +35,8 @@ pub fn run() {
             remove_account,
             rename_account,
             switch_account,
+            get_switch_history,
+            refresh_tray_menu,
             toggle_priority,
             update_settings,
             detect_current_auth_email,
