@@ -173,6 +173,15 @@ pub struct SwitchHistoryEntry {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct AuthTokenInfo {
+    pub kind: String,
+    pub present: bool,
+    pub expires_at: Option<String>,
+    pub status: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AccountMeta {
     pub name: String,
     pub note: Option<String>,
@@ -189,6 +198,7 @@ pub struct AccountMeta {
     pub priority: Option<bool>,
     pub health: AccountHealth,
     pub health_message: Option<String>,
+    pub auth_tokens: Vec<AuthTokenInfo>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

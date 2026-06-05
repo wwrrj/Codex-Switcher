@@ -92,44 +92,100 @@ fn ensure_dir(path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn account_health(auth_file: &Path) -> (AccountHealth, Option<String>) {
+fn jwt_expires_at(token: &str) -> Option<i64> {
+    decode_jwt_payload(token)?.get("exp")?.as_i64()
+}
+
+fn token_info(kind: &str, token: Option<&str>) -> AuthTokenInfo {
+    let Some(token) = token else {
+        return AuthTokenInfo {
+            kind: kind.to_string(),
+            present: false,
+            expires_at: None,
+            status: "missing".to_string(),
+        };
+    };
+    let Some(exp) = jwt_expires_at(token) else {
+        return AuthTokenInfo {
+            kind: kind.to_string(),
+            present: true,
+            expires_at: None,
+            status: "no_expiry_claim".to_string(),
+        };
+    };
+    let remaining = exp - Utc::now().timestamp();
+    let status = if remaining <= 0 {
+        "expired"
+    } else if remaining <= 24 * 60 * 60 {
+        "expiring_soon"
+    } else {
+        "valid"
+    };
+    AuthTokenInfo {
+        kind: kind.to_string(),
+        present: true,
+        expires_at: chrono::DateTime::<Utc>::from_timestamp(exp, 0).map(|dt| dt.to_rfc3339()),
+        status: status.to_string(),
+    }
+}
+
+fn auth_token_infos(auth_json: &Value) -> Vec<AuthTokenInfo> {
+    let access_token = string_at_path(auth_json, &["tokens", "access_token"])
+        .or_else(|| string_at_path(auth_json, &["access_token"]));
+    let id_token = string_at_path(auth_json, &["tokens", "id_token"])
+        .or_else(|| string_at_path(auth_json, &["id_token"]))
+        .or_else(|| string_at_path(auth_json, &["idToken"]));
+    let refresh_token = string_at_path(auth_json, &["tokens", "refresh_token"])
+        .or_else(|| string_at_path(auth_json, &["refresh_token"]));
+
+    vec![
+        token_info("access_token", access_token),
+        token_info("id_token", id_token),
+        token_info("refresh_token", refresh_token),
+    ]
+}
+
+fn account_health(auth_file: &Path) -> (AccountHealth, Option<String>, Vec<AuthTokenInfo>) {
     let auth_json = match read_json(auth_file) {
         Ok(value) => value,
-        Err(error) => return (AccountHealth::Invalid, Some(error.to_string())),
+        Err(error) => return (AccountHealth::Invalid, Some(error.to_string()), Vec::new()),
     };
-    let Some(token) = find_token(&auth_json) else {
+    let tokens = auth_token_infos(&auth_json);
+    let has_any_token = tokens.iter().any(|token| token.present);
+    if !has_any_token {
         return (
-            AccountHealth::Healthy,
-            Some("认证文件有效，但没有可校验到期时间的 ID Token".to_string()),
+            AccountHealth::Invalid,
+            Some("认证文件中未找到 access_token、id_token 或 refresh_token".to_string()),
+            tokens,
         );
-    };
-    let Some(payload) = decode_jwt_payload(&token) else {
-        return (AccountHealth::Invalid, Some("无法解析 ID Token".to_string()));
-    };
-    let Some(expires_at) = payload.get("exp").and_then(Value::as_i64) else {
-        return (AccountHealth::Healthy, None);
-    };
-    let remaining = expires_at - Utc::now().timestamp();
-    if remaining <= 0 {
-        let has_refresh_token = string_at_path(&auth_json, &["tokens", "refresh_token"])
-            .or_else(|| string_at_path(&auth_json, &["refresh_token"]))
-            .is_some();
-        if has_refresh_token {
-            (
-                AccountHealth::Healthy,
-                Some("ID Token 已过期，Codex 可使用 Refresh Token 自动续期".to_string()),
-            )
-        } else {
-            (AccountHealth::Expired, Some("认证已过期，需要重新登录".to_string()))
-        }
-    } else if remaining <= 24 * 60 * 60 {
-        (
-            AccountHealth::ExpiringSoon,
-            Some("认证将在 24 小时内过期".to_string()),
-        )
-    } else {
-        (AccountHealth::Healthy, None)
     }
+
+    let has_refresh_token = tokens
+        .iter()
+        .any(|token| token.kind == "refresh_token" && token.present);
+    let access = tokens.iter().find(|token| token.kind == "access_token");
+    let id = tokens.iter().find(|token| token.kind == "id_token");
+
+    let health = match access.map(|token| token.status.as_str()) {
+        Some("expired") if !has_refresh_token => AccountHealth::Expired,
+        Some("expired") => AccountHealth::ExpiringSoon,
+        Some("expiring_soon") => AccountHealth::ExpiringSoon,
+        _ => AccountHealth::Healthy,
+    };
+
+    let message = match access.map(|token| token.status.as_str()) {
+        Some("expired") if has_refresh_token => {
+            Some("Access Token 已过期，但已保存 Refresh Token，可由 Codex 自动续期".to_string())
+        }
+        Some("expired") => Some("Access Token 已过期，且未找到 Refresh Token".to_string()),
+        Some("expiring_soon") => Some("Access Token 将在 24 小时内过期".to_string()),
+        _ if id.map(|token| token.status.as_str()) == Some("expired") && has_refresh_token => {
+            Some("ID Token 已过期；Access Token/Refresh Token 状态见下方明细".to_string())
+        }
+        _ => Some("Token 结构有效，过期时间见下方明细".to_string()),
+    };
+
+    (health, message, tokens)
 }
 
 fn append_switch_history(home: &Path, entry: SwitchHistoryEntry) -> Result<()> {
@@ -983,7 +1039,7 @@ pub fn list_accounts(home: &Path) -> Result<Vec<AccountMeta>> {
             .clone()
             .map(manual_subscription)
             .or_else(|| detect_subscription_from_auth_file(&acc_auth).ok());
-        let (health, health_message) = account_health(&acc_auth);
+        let (health, health_message, auth_tokens) = account_health(&acc_auth);
 
         result.push(AccountMeta {
             name,
@@ -1001,6 +1057,7 @@ pub fn list_accounts(home: &Path) -> Result<Vec<AccountMeta>> {
             source: None,
             health,
             health_message,
+            auth_tokens,
         });
     }
 
@@ -1045,7 +1102,7 @@ pub fn add_account(
     };
     write_account_meta_file(&acc_dir.join("meta.json"), &meta)?;
     let subscription = detect_subscription_from_auth_file(&dst).ok();
-    let (health, health_message) = account_health(&dst);
+    let (health, health_message, auth_tokens) = account_health(&dst);
 
     Ok(AccountMeta {
         name: name.to_string(),
@@ -1063,6 +1120,7 @@ pub fn add_account(
         source: None,
         health,
         health_message,
+        auth_tokens,
     })
 }
 

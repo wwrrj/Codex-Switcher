@@ -202,6 +202,18 @@ export default function MainArea({ onRename, onDelete, onAddAccount }: Props) {
                 </div>
               </div>
 
+              <div className="rounded-lg bg-bg-elevated/60 border border-line-subtle p-2.5 space-y-1.5">
+                <p className="text-[11px] font-medium text-fg-muted mb-1">Token 过期时间</p>
+                {account.authTokens.map((token) => (
+                  <MetaRow
+                    key={token.kind}
+                    icon={<Key className="w-3 h-3" />}
+                    label={tokenLabel(token.kind)}
+                    value={tokenExpiryText(token)}
+                  />
+                ))}
+              </div>
+
               {/* Account metadata */}
               <div className="rounded-lg bg-bg-elevated/60 border border-line-subtle p-2.5 space-y-1">
                 <MetaRow icon={<Calendar className="w-3 h-3" />} label="创建时间" value={formatDate(account.createdAt)} />
@@ -418,4 +430,22 @@ function MetaRow({ icon, label, value }: { icon: React.ReactNode; label: string;
       <span className="text-fg">{value}</span>
     </div>
   )
+}
+
+function tokenLabel(kind: string): string {
+  if (kind === 'access_token') return 'Access'
+  if (kind === 'id_token') return 'ID'
+  if (kind === 'refresh_token') return 'Refresh'
+  return kind
+}
+
+function tokenExpiryText(token: { present: boolean; expiresAt?: string; status: string }): string {
+  if (!token.present) return '未保存'
+  if (!token.expiresAt) return '无 exp'
+  const suffix = token.status === 'expired'
+    ? '已过期'
+    : token.status === 'expiring_soon'
+      ? '即将过期'
+      : '有效'
+  return `${formatDate(token.expiresAt)} · ${suffix}`
 }

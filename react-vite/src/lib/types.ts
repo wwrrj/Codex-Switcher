@@ -114,6 +114,14 @@ export interface AccountMeta {
   priority?: boolean;
   health: "healthy" | "expiring_soon" | "expired" | "invalid";
   healthMessage?: string;
+  authTokens: AuthTokenInfo[];
+}
+
+export interface AuthTokenInfo {
+  kind: string;
+  present: boolean;
+  expiresAt?: string;
+  status: "missing" | "no_expiry_claim" | "valid" | "expiring_soon" | "expired" | string;
 }
 
 export interface SwitchHistoryEntry {
