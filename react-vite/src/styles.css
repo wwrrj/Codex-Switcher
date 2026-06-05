@@ -94,6 +94,12 @@ body {
   -moz-osx-font-smoothing: grayscale;
 }
 
+html.tray-window,
+html.tray-window body,
+html.tray-window #root {
+  background: transparent !important;
+}
+
 /* ── Scrollbar ── */
 ::-webkit-scrollbar {
   width: 6px;

@@ -24,8 +24,8 @@
       {
         "title": "Codex Switcher Tray",
         "label": "tray-menu",
-        "width": 320,
-        "height": 420,
+        "width": 360,
+        "height": 260,
         "resizable": false,
         "decorations": false,
         "transparent": true,
