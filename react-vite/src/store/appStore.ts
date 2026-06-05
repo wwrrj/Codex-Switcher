@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import type { AccountMeta, CodexAuthStatus, AppLog, AppSettings, RefreshProgress, ToastItem, SubscriptionPlan, CodexUsageInfo, DailyUsageEntry, TokenUsageSummary, SwitchHistoryEntry } from '@/lib/types'
 import * as api from '@/lib/api'
+import * as usageDb from '@/lib/usageDb'
 
 const USAGE_HISTORY_KEY = 'codex-switcher:daily-usage-history:v1'
 const USAGE_HISTORY_LIMIT_DAYS = 182
@@ -157,8 +158,17 @@ export const useAppStore = create<AppStore>((set, get) => ({
     set({ loading: true })
     try {
       const state = await api.getAppState()
+      const cachedUsages = await usageDb.getCachedUsages()
+      const cachedTokenUsage = await usageDb.getCachedTokenUsage()
+      const usageByAccount = new Map(cachedUsages.map((usage) => [usage.accountName, usage]))
+      const accounts = state.accounts.map((account) => {
+        const usage = usageByAccount.get(account.name)
+        return usage
+          ? { ...account, usage, subscription: usage.subscription ?? account.subscription, lastUsageCheckAt: usage.fetchedAt }
+          : account
+      })
       set({
-        accounts: state.accounts,
+        accounts,
         authStatus: state.authStatus,
         activeAccount: state.activeAccount ?? null,
         selectedAccount: state.selectedAccount ?? state.activeAccount ?? null,
@@ -166,9 +176,14 @@ export const useAppStore = create<AppStore>((set, get) => ({
         settings: state.settings,
         theme: state.settings.theme,
         switchHistory: state.switchHistory,
+        tokenUsage: cachedTokenUsage,
         loading: false,
       })
       get().applyTheme(state.settings.theme)
+      void get().refreshTokenUsage()
+      if (state.settings.enableUsageQuery && state.settings.refreshUsageOnStartup && state.accounts.length > 0) {
+        void get().refreshAllUsage(true)
+      }
     } catch (e: unknown) {
       set({ loading: false })
       get().addToast('error', e instanceof Error ? e.message : '初始化失败')
@@ -288,6 +303,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
           : a
       )
       get().recordUsageSnapshot(usage)
+      void usageDb.saveUsage(usage)
       set({ accounts, logs: api.getLogs() })
       void api.notifyUsageThreshold([usage], get().settings)
     } catch (e: unknown) {
@@ -312,6 +328,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
       )
       const usageByAccount = new Map(usages.map((usage) => [usage.accountName, usage]))
       usages.forEach((usage) => get().recordUsageSnapshot(usage))
+      void usageDb.saveUsages(usages)
       const accounts = get().accounts.map((account) => {
         const usage = usageByAccount.get(account.name)
         if (!usage) return account
@@ -426,6 +443,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
     set({ isRefreshingTokenUsage: true })
     try {
       const tokenUsage = await api.getTokenUsageSummary()
+      void usageDb.saveTokenUsage(tokenUsage)
       set({ tokenUsage, logs: api.getLogs() })
     } catch (e: unknown) {
       get().addToast('error', e instanceof Error ? e.message : 'Token 统计失败')

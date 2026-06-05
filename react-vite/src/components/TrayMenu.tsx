@@ -66,6 +66,7 @@ export default function TrayMenu() {
               accounts.map((account) => {
                 const active = account.name === activeAccount
                 const usage = account.usage?.windows.find((window) => window.window === '5h')?.percentage
+                const remaining = usage == null ? null : Math.max(0, Math.round(100 - usage))
                 return (
                   <button
                     key={account.name}
@@ -93,7 +94,7 @@ export default function TrayMenu() {
                         <span className="text-[10px] text-fg-subtle">Unknown</span>
                       )}
                       <span className="text-[10px] text-fg-subtle tabular-nums">
-                        {usage == null ? '未查询' : `5h ${Math.max(0, 100 - usage)}% 剩余`}
+                        {remaining == null ? '未查询' : `5h ${remaining}% 剩余`}
                       </span>
                     </div>
                   </button>

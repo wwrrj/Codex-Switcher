@@ -97,6 +97,7 @@ export default function AccountPool({ onAddAccount }: Props) {
             const isActive = acc.name === activeAccount
             const usage5h = acc.usage?.windows.find((w) => w.window === '5h')
             const pct = usage5h?.percentage
+            const remainingPct = pct == null ? null : Math.max(0, Math.round(100 - pct))
             const isConfirming = confirmTarget === acc.name
             const isPriority = !!acc.priority
 
@@ -152,26 +153,26 @@ export default function AccountPool({ onAddAccount }: Props) {
                   {/* Usage info */}
                   {acc.subscription?.plan === 'api_key' ? (
                     <span className="text-[11px] text-fg-subtle">Platform 计费</span>
-                  ) : pct != null ? (
+                  ) : remainingPct != null ? (
                     <div className="space-y-1">
                       <div className="flex items-center justify-between">
                         <span className="text-[11px] text-fg-muted">5h 剩余</span>
                         <span
                           className={cn(
                             'text-[11px] font-medium tabular-nums',
-                            pct >= 90 ? 'text-danger' : pct >= 70 ? 'text-warning' : 'text-fg'
+                            remainingPct <= 10 ? 'text-danger' : remainingPct <= 30 ? 'text-warning' : 'text-fg'
                           )}
                         >
-                          {100 - pct}%
+                          {remainingPct}%
                         </span>
                       </div>
                       <div className="w-full h-1 rounded-full bg-bg-elevated overflow-hidden">
                         <div
                           className={cn(
                             'h-full rounded-full',
-                            pct >= 90 ? 'bg-danger' : pct >= 70 ? 'bg-warning' : 'bg-primary'
+                            remainingPct <= 10 ? 'bg-danger' : remainingPct <= 30 ? 'bg-warning' : 'bg-success'
                           )}
-                          style={{ width: `${Math.min(pct, 100)}%` }}
+                          style={{ width: `${remainingPct}%` }}
                         />
                       </div>
                     </div>

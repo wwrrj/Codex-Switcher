@@ -16,9 +16,22 @@ import TrayMenu from '@/components/TrayMenu'
 
 export default function App() {
   const windowLabel = getCurrentWindow().label
+
+  if (windowLabel === 'tray-menu') {
+    return <TrayMenu />
+  }
+
+  return <MainApp />
+}
+
+function MainApp() {
   const init = useAppStore((s) => s.init)
   const activeAccount = useAppStore((s) => s.activeAccount)
+  const accountCount = useAppStore((s) => s.accounts.length)
+  const enableUsageQuery = useAppStore((s) => s.settings.enableUsageQuery)
+  const refreshUsageIntervalMinutes = useAppStore((s) => s.settings.refreshUsageIntervalMinutes)
   const refreshAllUsage = useAppStore((s) => s.refreshAllUsage)
+  const refreshTokenUsage = useAppStore((s) => s.refreshTokenUsage)
   const addToast = useAppStore((s) => s.addToast)
 
   const [settingsOpen, setSettingsOpen] = useState(false)
@@ -48,16 +61,35 @@ export default function App() {
     }
   }, [addToast, init, refreshAllUsage])
 
+  useEffect(() => {
+    if (!enableUsageQuery || accountCount === 0) return
+    const intervalMs = Math.max(1, refreshUsageIntervalMinutes || 15) * 60_000
+    const timer = window.setInterval(() => {
+      void refreshAllUsage(true)
+    }, intervalMs)
+    return () => window.clearInterval(timer)
+  }, [accountCount, enableUsageQuery, refreshAllUsage, refreshUsageIntervalMinutes])
+
+  useEffect(() => {
+    const refreshCurrentTokenUsage = () => {
+      if (document.visibilityState === 'visible') void refreshTokenUsage()
+    }
+    const timer = window.setInterval(refreshCurrentTokenUsage, 60_000)
+    window.addEventListener('focus', refreshCurrentTokenUsage)
+    document.addEventListener('visibilitychange', refreshCurrentTokenUsage)
+    return () => {
+      window.clearInterval(timer)
+      window.removeEventListener('focus', refreshCurrentTokenUsage)
+      document.removeEventListener('visibilitychange', refreshCurrentTokenUsage)
+    }
+  }, [refreshTokenUsage])
+
   const handleDelete = useCallback(() => {
     const active = useAppStore.getState().activeAccount
     if (active) {
       setDeleteTarget({ name: active, isActive: true })
     }
   }, [])
-
-  if (windowLabel === 'tray-menu') {
-    return <TrayMenu />
-  }
 
   return (
     <div

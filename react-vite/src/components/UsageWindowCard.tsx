@@ -1,6 +1,6 @@
 import { Clock, TrendingUp } from 'lucide-react'
 import type { UsageWindow } from '@/lib/types'
-import { cn, percentageColor, formatResetTime } from '@/lib/utils'
+import { cn, formatResetTime } from '@/lib/utils'
 
 interface Props {
   windowData: UsageWindow | null
@@ -22,26 +22,26 @@ export default function UsageWindowCard({ windowData, label }: Props) {
   }
 
   const pct = windowData.percentage
-  const colors = percentageColor(pct)
-  const remainingPct = pct != null ? 100 - pct : null
+  const remainingPct = pct != null ? Math.max(0, Math.round(100 - pct)) : null
+  const remainingColors = remainingColor(remainingPct)
 
   return (
     <div
       data-component="UsageWindowCard"
       className={cn(
         'rounded-xl border bg-bg-surface p-4 card-ring',
-        pct != null && pct >= 90 ? 'border-danger/30' : 'border-line'
+        remainingPct != null && remainingPct <= 10 ? 'border-danger/30' : 'border-line'
       )}
     >
-      {/* Header: label + percentage */}
+      {/* Header: label + remaining percentage */}
       <div className="flex items-center justify-between mb-3">
         <div className="flex items-center gap-2">
           <TrendingUp className="w-3.5 h-3.5 text-fg-subtle" strokeWidth={2} />
           <h3 className="text-sm font-semibold text-fg tracking-tight font-serif">{label}</h3>
         </div>
-        {pct != null && (
-          <span className={cn('text-xl font-bold tabular-nums', colors.text)}>
-            {pct}%
+        {remainingPct != null && (
+          <span className={cn('text-xl font-bold tabular-nums', remainingColors.text)}>
+            {remainingPct}%
           </span>
         )}
       </div>
@@ -52,11 +52,15 @@ export default function UsageWindowCard({ windowData, label }: Props) {
           <div
             className={cn(
               'h-full rounded-full transition-all duration-500',
-              colors.bar,
-              pct != null && pct >= 90 && 'progress-pulse'
+              remainingColors.bar,
+              remainingPct != null && remainingPct <= 10 && 'progress-pulse'
             )}
-            style={{ width: pct != null ? `${Math.min(pct, 100)}%` : '0%' }}
+            style={{ width: remainingPct != null ? `${remainingPct}%` : '0%' }}
           />
+        </div>
+        <div className="flex items-center justify-between mt-1.5 text-[10px] text-fg-subtle">
+          <span>剩余比例</span>
+          {pct != null && <span>已用 {Math.round(pct)}%</span>}
         </div>
       </div>
 
@@ -77,7 +81,7 @@ export default function UsageWindowCard({ windowData, label }: Props) {
             <p
               className={cn(
                 'text-sm font-semibold tabular-nums',
-                pct != null && pct >= 90 ? 'text-danger' : pct != null && pct >= 70 ? 'text-warning' : 'text-fg'
+                remainingPct != null && remainingPct <= 10 ? 'text-danger' : remainingPct != null && remainingPct <= 30 ? 'text-warning' : 'text-fg'
               )}
             >
               {windowData.remaining}
@@ -109,4 +113,11 @@ export default function UsageWindowCard({ windowData, label }: Props) {
       )}
     </div>
   )
+}
+
+function remainingColor(remainingPct: number | null): { bar: string; text: string } {
+  if (remainingPct == null) return { bar: 'bg-fg-subtle/30', text: 'text-fg-muted' }
+  if (remainingPct <= 10) return { bar: 'bg-danger', text: 'text-danger' }
+  if (remainingPct <= 30) return { bar: 'bg-warning', text: 'text-warning' }
+  return { bar: 'bg-success', text: 'text-success' }
 }
