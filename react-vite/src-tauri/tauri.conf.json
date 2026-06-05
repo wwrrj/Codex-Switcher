@@ -20,6 +20,18 @@
         "minHeight": 600,
         "resizable": true,
         "decorations": false
+      },
+      {
+        "title": "Codex Switcher Tray",
+        "label": "tray-menu",
+        "width": 320,
+        "height": 420,
+        "resizable": false,
+        "decorations": false,
+        "transparent": true,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "visible": false
       }
     ],
     "security": {

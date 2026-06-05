@@ -123,6 +123,21 @@ pub async fn refresh_tray_menu(app: tauri::AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
+pub fn show_main_window(app: tauri::AppHandle) -> Result<(), String> {
+    crate::tray::show_main_window(&app).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn hide_tray_menu(app: tauri::AppHandle) -> Result<(), String> {
+    crate::tray::hide_tray_menu(&app).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn quit_app(app: tauri::AppHandle) {
+    app.exit(0);
+}
+
+#[tauri::command]
 pub async fn toggle_priority(name: String) -> Result<bool, String> {
     blocking(move || {
         let actual_home = actual_home()?;

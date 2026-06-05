@@ -1,5 +1,6 @@
 import { useEffect, useState, useCallback } from 'react'
 import { listen } from '@tauri-apps/api/event'
+import { getCurrentWindow } from '@tauri-apps/api/window'
 import { useAppStore } from '@/store/appStore'
 import TitleBar from '@/components/TitleBar'
 import AppSidebar, { type AppPage } from '@/components/AppSidebar'
@@ -11,8 +12,10 @@ import DeleteAccountDialog from '@/components/DeleteAccountDialog'
 import RenameAccountDialog from '@/components/RenameAccountDialog'
 import SetSubscriptionDialog from '@/components/SetSubscriptionDialog'
 import ToastContainer from '@/components/ToastContainer'
+import TrayMenu from '@/components/TrayMenu'
 
 export default function App() {
+  const windowLabel = getCurrentWindow().label
   const init = useAppStore((s) => s.init)
   const activeAccount = useAppStore((s) => s.activeAccount)
   const refreshAllUsage = useAppStore((s) => s.refreshAllUsage)
@@ -51,6 +54,10 @@ export default function App() {
       setDeleteTarget({ name: active, isActive: true })
     }
   }, [])
+
+  if (windowLabel === 'tray-menu') {
+    return <TrayMenu />
+  }
 
   return (
     <div

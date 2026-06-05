@@ -71,6 +71,18 @@ export async function refreshTrayMenu(): Promise<void> {
   await invoke<void>('refresh_tray_menu')
 }
 
+export async function showMainWindow(): Promise<void> {
+  await invoke<void>('show_main_window')
+}
+
+export async function hideTrayMenu(): Promise<void> {
+  await invoke<void>('hide_tray_menu')
+}
+
+export async function quitApp(): Promise<void> {
+  await invoke<void>('quit_app')
+}
+
 export async function saveActiveAccount(): Promise<string> {
   const msg = await invoke<string>('save_active_account')
   addLog('success', msg)

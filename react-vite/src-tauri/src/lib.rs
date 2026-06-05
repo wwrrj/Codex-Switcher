@@ -13,6 +13,11 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|window, event| {
+            if window.label() == "tray-menu" {
+                if let tauri::WindowEvent::Focused(false) = event {
+                    let _ = window.hide();
+                }
+            }
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 api.prevent_close();
                 let _ = window.hide();
@@ -37,6 +42,9 @@ pub fn run() {
             switch_account,
             get_switch_history,
             refresh_tray_menu,
+            show_main_window,
+            hide_tray_menu,
+            quit_app,
             toggle_priority,
             update_settings,
             detect_current_auth_email,

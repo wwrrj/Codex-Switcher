@@ -3,7 +3,8 @@
   "identifier": "default",
   "description": "enables the default permissions plus fs and shell for Codex Switcher",
   "windows": [
-    "main"
+    "main",
+    "tray-menu"
   ],
   "permissions": [
     "core:default",
