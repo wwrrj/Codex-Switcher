@@ -917,25 +917,123 @@ fn close_codex_processes() {
     }
 }
 
-fn reopen_codex_app() {
+#[cfg(target_os = "windows")]
+fn where_codex_candidates() -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+    if let Ok(output) = Command::new("where.exe")
+        .arg("codex.exe")
+        .creation_flags(CREATE_NO_WINDOW)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .output()
+    {
+        if output.status.success() {
+            for line in String::from_utf8_lossy(&output.stdout).lines() {
+                let path = PathBuf::from(line.trim());
+                if path.exists() {
+                    candidates.push(path);
+                }
+            }
+        }
+    }
+    candidates
+}
+
+#[cfg(target_os = "windows")]
+fn windows_codex_candidates() -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+
+    if let Ok(path) = std::env::var("CODEX_EXECUTABLE") {
+        candidates.push(PathBuf::from(path));
+    }
+
+    candidates.extend(where_codex_candidates());
+
+    if let Ok(local_app_data) = std::env::var("LOCALAPPDATA") {
+        candidates.push(
+            PathBuf::from(local_app_data)
+                .join("Microsoft")
+                .join("WindowsApps")
+                .join("codex.exe"),
+        );
+    }
+
+    if let Ok(program_files) = std::env::var("ProgramFiles") {
+        let windows_apps = PathBuf::from(program_files).join("WindowsApps");
+        if let Ok(entries) = std::fs::read_dir(windows_apps) {
+            for entry in entries.filter_map(|entry| entry.ok()) {
+                let name = entry.file_name().to_string_lossy().to_string();
+                if name.starts_with("OpenAI.Codex_") {
+                    candidates.push(entry.path().join("app").join("resources").join("codex.exe"));
+                }
+            }
+        }
+    }
+
+    candidates.sort();
+    candidates.dedup();
+    candidates
+        .into_iter()
+        .filter(|path| path.exists())
+        .collect()
+}
+
+#[cfg(target_os = "windows")]
+fn spawn_codex_executable(path: &Path) -> Result<()> {
+    Command::new(path)
+        .arg("app")
+        .creation_flags(CREATE_NO_WINDOW)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .with_context(|| format!("启动 Codex 失败: {}", path.display()))?;
+    Ok(())
+}
+
+fn reopen_codex_app() -> Result<()> {
     #[cfg(target_os = "windows")]
     {
-        let _ = Command::new("cmd")
-            .args(["/C", "start", "", "codex", "app"])
+        let candidates = windows_codex_candidates();
+        let mut errors = Vec::new();
+        for candidate in &candidates {
+            match spawn_codex_executable(candidate) {
+                Ok(()) => return Ok(()),
+                Err(error) => errors.push(error.to_string()),
+            }
+        }
+
+        if let Ok(()) = Command::new("codex")
+            .arg("app")
             .creation_flags(CREATE_NO_WINDOW)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
-            .spawn();
+            .spawn()
+            .map(|_| ())
+        {
+            return Ok(());
+        }
+
+        return Err(anyhow::anyhow!(
+            "找不到可启动的 Codex。已尝试 where.exe、WindowsApps 和 CODEX_EXECUTABLE。{}",
+            if errors.is_empty() {
+                String::new()
+            } else {
+                format!("错误: {}", errors.join("; "))
+            }
+        ));
     }
 
     #[cfg(not(target_os = "windows"))]
     {
-        let _ = Command::new("codex")
+        Command::new("codex")
             .arg("app")
             .stdout(Stdio::null())
             .stderr(Stdio::null())
-            .spawn();
+            .spawn()
+            .context("启动 Codex 失败")?;
+        Ok(())
     }
 }
 
@@ -1148,9 +1246,9 @@ pub fn prepare_new_account_login(home: &Path) -> Result<NewAccountLoginPreparati
                 .with_context(|| format!("删除旧 auth.json 失败: {}", ap.display()))?;
         }
 
-        reopen_codex_app();
+        reopen_codex_app()?;
     } else if !status.exists {
-        reopen_codex_app();
+        reopen_codex_app()?;
     }
 
     Ok(NewAccountLoginPreparation {
@@ -1249,7 +1347,7 @@ fn switch_account_inner(home: &Path, name: &str) -> Result<()> {
     }
     std::fs::copy(&acc_auth, &ap)?;
 
-    reopen_codex_app();
+    reopen_codex_app()?;
     Ok(())
 }
 
