@@ -38,16 +38,22 @@ export default function TitleBar({ sidebarCollapsed, onToggleSidebar, onOpenSett
   const minimize = () => void appWindow.minimize()
   const toggleMaximize = () => void appWindow.toggleMaximize()
   const closeWindow = () => void appWindow.close()
+  const startDragging = (event: React.PointerEvent) => {
+    if (event.button !== 0) return
+    void appWindow.startDragging()
+  }
 
   return (
     <header
       data-component="TitleBar"
       data-tauri-drag-region
+      onPointerDown={startDragging}
       className="h-11 shrink-0 border-b border-line bg-bg-surface select-none grid grid-cols-[1fr_auto] items-center"
     >
       <div data-tauri-drag-region className="min-w-0 flex items-center gap-2 px-3">
         <button
           type="button"
+          onPointerDown={(event) => event.stopPropagation()}
           onClick={onToggleSidebar}
           title={sidebarCollapsed ? '展开侧边栏' : '缩小侧边栏'}
           className="w-7 h-7 flex items-center justify-center rounded-md text-fg-muted hover:text-fg hover:bg-bg-hover transition-colors shrink-0"
@@ -143,6 +149,7 @@ function TitleButton({
       type="button"
       title={title}
       aria-label={title}
+      onPointerDown={(event) => event.stopPropagation()}
       onClick={onClick}
       disabled={disabled}
       className="w-8 h-8 flex items-center justify-center rounded-md text-fg-muted hover:text-fg hover:bg-bg-hover transition-colors disabled:opacity-50"
@@ -168,6 +175,7 @@ function WindowButton({
       type="button"
       title={title}
       aria-label={title}
+      onPointerDown={(event) => event.stopPropagation()}
       onClick={onClick}
       className={cn(
         'w-11 h-11 flex items-center justify-center text-fg-muted transition-colors',
