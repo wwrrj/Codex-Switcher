@@ -8,6 +8,10 @@ use commands::*;
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            let _ = tray::hide_tray_menu(app);
+            let _ = tray::show_main_window(app);
+        }))
         .setup(|app| {
             tray::setup(app)?;
             Ok(())
