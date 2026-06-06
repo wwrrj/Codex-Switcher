@@ -204,7 +204,7 @@ export default function MainArea({ onRename, onDelete, onAddAccount }: Props) {
 
               <div className="rounded-lg bg-bg-elevated/60 border border-line-subtle p-2.5 space-y-1.5">
                 <p className="text-[11px] font-medium text-fg-muted mb-1">Token 过期时间</p>
-                {account.authTokens.map((token) => (
+                {account.authTokens.filter((token) => token.kind === 'access_token').map((token) => (
                   <MetaRow
                     key={token.kind}
                     icon={<Key className="w-3 h-3" />}
@@ -212,9 +212,6 @@ export default function MainArea({ onRename, onDelete, onAddAccount }: Props) {
                     value={tokenExpiryText(token.kind, token)}
                   />
                 ))}
-                <p className="text-[10px] text-fg-subtle leading-relaxed">
-                  Codex 请求使用 Access Token；ID Token 主要用于身份和订阅声明，过期后仍可由 Refresh Token 续期。
-                </p>
               </div>
 
               {/* Account metadata */}
@@ -437,8 +434,6 @@ function MetaRow({ icon, label, value }: { icon: React.ReactNode; label: string;
 
 function tokenLabel(kind: string): string {
   if (kind === 'access_token') return 'Access'
-  if (kind === 'id_token') return 'ID'
-  if (kind === 'refresh_token') return 'Refresh'
   return kind
 }
 
@@ -446,9 +441,9 @@ function tokenExpiryText(kind: string, token: { present: boolean; expiresAt?: st
   if (!token.present) return '未保存'
   if (!token.expiresAt) return '无 exp'
   const suffix = token.status === 'expired'
-    ? kind === 'id_token' ? '声明过期' : '已过期'
+    ? '已过期'
     : token.status === 'expiring_soon'
-      ? kind === 'id_token' ? '声明将过期' : '即将过期'
+      ? '即将过期'
       : '有效'
   return `${formatDate(token.expiresAt)} · ${suffix}`
 }
