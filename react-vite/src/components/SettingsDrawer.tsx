@@ -3,6 +3,7 @@ import { X, RotateCcw } from 'lucide-react'
 import { useAppStore } from '@/store/appStore'
 import { cn } from '@/lib/utils'
 import type { AppSettings } from '@/lib/types'
+import SmartQuotaSchedulerPanel from './SmartQuotaSchedulerPanel'
 
 const defaultSettings: AppSettings = {
   autoDetectCodexHome: true,
@@ -128,6 +129,10 @@ export default function SettingsDrawer({ open, onClose }: Props) {
               />
               <span className="text-xs text-fg-subtle">% 已使用</span>
             </div>
+          </FieldGroup>
+
+          <FieldGroup label="智能配额调度">
+            <SmartQuotaSchedulerPanel />
           </FieldGroup>
 
           {/* Usage refresh interval */}

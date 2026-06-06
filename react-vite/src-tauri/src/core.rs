@@ -1,11 +1,11 @@
 use anyhow::{Context, Result};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
-use chrono::{Local, NaiveDate, Utc};
+use chrono::{Datelike, Duration, Local, NaiveDate, Timelike, Utc};
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, USER_AGENT};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
@@ -56,6 +56,12 @@ fn priority_file(home: &Path) -> PathBuf {
 }
 fn switch_history_file(home: &Path) -> PathBuf {
     config_dir(home).join("switch_history.json")
+}
+fn scheduler_config_file(home: &Path) -> PathBuf {
+    config_dir(home).join("scheduler_config.json")
+}
+fn scheduler_history_file(home: &Path) -> PathBuf {
+    config_dir(home).join("scheduler_history.jsonl")
 }
 fn sessions_dir(home: &Path) -> PathBuf {
     home.join("sessions")
@@ -218,12 +224,19 @@ async fn refresh_auth_file_tokens(auth_file: &Path, force: bool) -> Result<bool>
     let status = response.status();
     let body = response.text().await.unwrap_or_default();
     if !status.is_success() {
-        return Err(anyhow::anyhow!("Codex OAuth token 刷新失败 {}: {}", status, body));
+        return Err(anyhow::anyhow!(
+            "Codex OAuth token 刷新失败 {}: {}",
+            status,
+            body
+        ));
     }
 
-    let refreshed: RefreshTokenResponse =
-        serde_json::from_str(&body).with_context(|| format!("解析 Codex OAuth 刷新响应失败: {body}"))?;
-    if refreshed.access_token.is_none() && refreshed.id_token.is_none() && refreshed.refresh_token.is_none() {
+    let refreshed: RefreshTokenResponse = serde_json::from_str(&body)
+        .with_context(|| format!("解析 Codex OAuth 刷新响应失败: {body}"))?;
+    if refreshed.access_token.is_none()
+        && refreshed.id_token.is_none()
+        && refreshed.refresh_token.is_none()
+    {
         return Err(anyhow::anyhow!("Codex OAuth 刷新响应没有返回任何 token"));
     }
 
@@ -231,7 +244,10 @@ async fn refresh_auth_file_tokens(auth_file: &Path, force: bool) -> Result<bool>
     upsert_token_field(&mut auth_json, "access_token", refreshed.access_token);
     upsert_token_field(&mut auth_json, "refresh_token", refreshed.refresh_token);
     if let Some(root) = auth_json.as_object_mut() {
-        root.insert("last_refresh".to_string(), Value::String(Utc::now().to_rfc3339()));
+        root.insert(
+            "last_refresh".to_string(),
+            Value::String(Utc::now().to_rfc3339()),
+        );
     }
     write_json(auth_file, &auth_json)?;
     Ok(true)
@@ -946,6 +962,698 @@ pub fn get_token_usage_summary(home: &Path) -> Result<TokenUsageSummary> {
     })
 }
 
+// ── Smart quota scheduler ──
+
+#[derive(Debug, Clone)]
+struct SchedulerEvent {
+    timestamp: chrono::DateTime<Local>,
+    tokens: i64,
+}
+
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+struct SchedulerSession {
+    start: chrono::DateTime<Local>,
+    end: chrono::DateTime<Local>,
+    requests: u32,
+    tokens: i64,
+}
+
+fn scheduler_default_analysis(warning: Option<String>) -> SchedulerAnalysis {
+    SchedulerAnalysis {
+        fetched_at: Utc::now().to_rfc3339(),
+        account_name: None,
+        maturity: SchedulerMaturity {
+            active_usage_days: 0,
+            total_sessions: 0,
+            total_requests: 0,
+            total_tokens: 0,
+            weekday_active_days: 0,
+            weekend_active_days: 0,
+            confidence_score: 0,
+            remaining_active_days_to_optimal: 14,
+            estimated_calendar_days_to_optimal: 14,
+            level: SchedulerMaturityLevel::Insufficient,
+        },
+        recommendation: None,
+        heatmap: Vec::new(),
+        warning,
+    }
+}
+
+fn parse_local_datetime(timestamp: Option<&str>) -> Option<chrono::DateTime<Local>> {
+    let raw = timestamp?;
+    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(raw) {
+        return Some(dt.with_timezone(&Local));
+    }
+    for fmt in ["%Y/%m/%d %H:%M:%S", "%Y-%m-%d %H:%M:%S"] {
+        if let Ok(dt) = chrono::NaiveDateTime::parse_from_str(raw, fmt) {
+            return dt.and_local_timezone(Local).single();
+        }
+    }
+    None
+}
+
+fn minute_label(minute: u32) -> String {
+    format!("{:02}:{:02}", minute / 60, minute % 60)
+}
+
+fn add_minutes_label(minute: u32, delta: u32) -> String {
+    minute_label((minute + delta) % 1440)
+}
+
+fn scan_scheduler_events_file(path: &Path, events: &mut Vec<SchedulerEvent>) -> Result<u32> {
+    let file = File::open(path).with_context(|| format!("打开会话文件失败: {}", path.display()))?;
+    let reader = BufReader::new(file);
+    let mut count = 0;
+
+    for line in reader.lines() {
+        let line = line?;
+        if !line.contains("\"token_count\"") || !line.contains("\"last_token_usage\"") {
+            continue;
+        }
+        let Ok(parsed) = serde_json::from_str::<RolloutLine>(&line) else {
+            continue;
+        };
+        let Some(payload) = parsed.payload else {
+            continue;
+        };
+        if payload.payload_type.as_deref() != Some("token_count") {
+            continue;
+        }
+        let Some(info) = payload.info else {
+            continue;
+        };
+        let Some(timestamp) = parse_local_datetime(parsed.timestamp.as_deref()) else {
+            continue;
+        };
+        let tokens = if info.last_token_usage.total_tokens > 0 {
+            info.last_token_usage.total_tokens
+        } else {
+            info.total_token_usage.total_tokens
+        };
+        if tokens <= 0 {
+            continue;
+        }
+        events.push(SchedulerEvent { timestamp, tokens });
+        count += 1;
+    }
+
+    Ok(count)
+}
+
+fn collect_scheduler_events(home: &Path) -> Result<(Vec<SchedulerEvent>, Vec<String>)> {
+    let mut files = Vec::new();
+    collect_rollout_files(&sessions_dir(home), &mut files)?;
+    collect_rollout_files(&archived_sessions_dir(home), &mut files)?;
+    files.sort();
+
+    let mut events = Vec::new();
+    let mut warnings = Vec::new();
+    for file in files {
+        if let Err(error) = scan_scheduler_events_file(&file, &mut events) {
+            warnings.push(format!("{}: {}", file.display(), error));
+        }
+    }
+    events.sort_by_key(|event| event.timestamp);
+    Ok((events, warnings))
+}
+
+fn build_scheduler_sessions(events: &[SchedulerEvent]) -> Vec<SchedulerSession> {
+    let mut sessions: Vec<SchedulerSession> = Vec::new();
+    for event in events {
+        if let Some(current) = sessions.last_mut() {
+            let gap = event.timestamp - current.end;
+            if gap <= Duration::minutes(30) {
+                current.end = event.timestamp;
+                current.requests += 1;
+                current.tokens += event.tokens.max(0);
+                continue;
+            }
+        }
+        sessions.push(SchedulerSession {
+            start: event.timestamp,
+            end: event.timestamp,
+            requests: 1,
+            tokens: event.tokens.max(0),
+        });
+    }
+    sessions
+}
+
+fn scheduler_maturity(
+    events: &[SchedulerEvent],
+    sessions: &[SchedulerSession],
+) -> SchedulerMaturity {
+    let mut active_days = BTreeSet::new();
+    let mut weekday_days = BTreeSet::new();
+    let mut weekend_days = BTreeSet::new();
+    for event in events {
+        let date = event.timestamp.date_naive();
+        active_days.insert(date);
+        if event.timestamp.weekday().number_from_monday() <= 5 {
+            weekday_days.insert(date);
+        } else {
+            weekend_days.insert(date);
+        }
+    }
+
+    let active_usage_days = active_days.len() as u32;
+    let total_requests = events.len() as u32;
+    let total_tokens = events.iter().map(|event| event.tokens.max(0)).sum();
+    let level = if active_usage_days >= 30 {
+        SchedulerMaturityLevel::Reliable
+    } else if active_usage_days >= 14 {
+        SchedulerMaturityLevel::Stable
+    } else if active_usage_days >= 7 {
+        SchedulerMaturityLevel::Usable
+    } else if active_usage_days >= 3 {
+        SchedulerMaturityLevel::Temporary
+    } else {
+        SchedulerMaturityLevel::Insufficient
+    };
+    let confidence_score = ((active_usage_days.min(14) * 5)
+        + (sessions.len() as u32).min(20)
+        + (total_requests / 3).min(10))
+    .min(100);
+    let remaining_active_days_to_optimal = 14_u32.saturating_sub(active_usage_days);
+    let calendar_span = active_days
+        .first()
+        .zip(active_days.last())
+        .map(|(first, last)| (*last - *first).num_days().max(1) as u32)
+        .unwrap_or(1);
+    let estimated_calendar_days_to_optimal = if active_usage_days == 0 {
+        remaining_active_days_to_optimal
+    } else {
+        ((remaining_active_days_to_optimal as f32)
+            / (active_usage_days as f32 / calendar_span as f32))
+            .ceil()
+            .max(remaining_active_days_to_optimal as f32) as u32
+    };
+
+    SchedulerMaturity {
+        active_usage_days,
+        total_sessions: sessions.len() as u32,
+        total_requests,
+        total_tokens,
+        weekday_active_days: weekday_days.len() as u32,
+        weekend_active_days: weekend_days.len() as u32,
+        confidence_score,
+        remaining_active_days_to_optimal,
+        estimated_calendar_days_to_optimal,
+        level,
+    }
+}
+
+fn build_scheduler_heatmap(events: &[SchedulerEvent]) -> Vec<SchedulerHeatmapBucket> {
+    let mut buckets: BTreeMap<(String, u32), (u32, i64)> = BTreeMap::new();
+    for event in events {
+        let day = event.timestamp.date_naive().to_string();
+        let minute = event.timestamp.hour() * 60 + event.timestamp.minute();
+        let bucket = (minute / 15) * 15;
+        let entry = buckets.entry((day, bucket)).or_insert((0, 0));
+        entry.0 += 1;
+        entry.1 += event.tokens.max(0);
+    }
+    let max_score = buckets
+        .values()
+        .map(|(requests, tokens)| *requests as f32 * 12.0 + (*tokens as f32 / 600.0))
+        .fold(0.0_f32, f32::max)
+        .max(1.0);
+
+    buckets
+        .into_iter()
+        .map(|((day, minute), (requests, tokens))| {
+            let score = requests as f32 * 12.0 + tokens as f32 / 600.0;
+            SchedulerHeatmapBucket {
+                day,
+                minute_of_day: minute,
+                label: minute_label(minute),
+                intensity: (score / max_score).min(1.0),
+                requests,
+                tokens,
+            }
+        })
+        .collect()
+}
+
+fn build_minute_weights(events: &[SchedulerEvent]) -> [f32; 1440] {
+    let mut weights = [0.0_f32; 1440];
+    if events.is_empty() {
+        return weights;
+    }
+    let newest = events.last().map(|event| event.timestamp.date_naive());
+    for event in events {
+        let minute = (event.timestamp.hour() * 60 + event.timestamp.minute()) as usize;
+        let recency = newest
+            .map(|day| (day - event.timestamp.date_naive()).num_days())
+            .unwrap_or(0);
+        let recency_weight = if recency <= 7 {
+            1.35
+        } else if recency <= 14 {
+            1.15
+        } else if recency <= 30 {
+            1.0
+        } else {
+            0.65
+        };
+        weights[minute] += recency_weight * (1.0 + (event.tokens.max(0) as f32 / 1200.0).min(6.0));
+    }
+    weights
+}
+
+fn high_intensity_windows(
+    weights: &[f32; 1440],
+    events: &[SchedulerEvent],
+) -> Vec<SchedulerUsageWindow> {
+    let max_weight = weights.iter().copied().fold(0.0_f32, f32::max);
+    if max_weight <= 0.0 {
+        return Vec::new();
+    }
+    let threshold = (max_weight * 0.35).max(1.0);
+    let mut windows = Vec::new();
+    let mut idx = 0_usize;
+    while idx < 1440 {
+        if weights[idx] < threshold {
+            idx += 1;
+            continue;
+        }
+        let start = idx;
+        let mut end = idx;
+        let mut intensity = 0.0_f32;
+        while end < 1440 && weights[end] >= threshold {
+            intensity += weights[end];
+            end += 1;
+        }
+        if end - start >= 10 {
+            let start_u32 = start as u32;
+            let end_u32 = (end as u32).min(1439);
+            let mut active_days = BTreeSet::new();
+            let mut requests = 0;
+            let mut tokens = 0;
+            for event in events {
+                let minute = event.timestamp.hour() * 60 + event.timestamp.minute();
+                if minute >= start_u32 && minute <= end_u32 {
+                    active_days.insert(event.timestamp.date_naive());
+                    requests += 1;
+                    tokens += event.tokens.max(0);
+                }
+            }
+            windows.push(SchedulerUsageWindow {
+                start_time: minute_label(start_u32),
+                end_time: minute_label(end_u32),
+                active_days: active_days.len() as u32,
+                requests,
+                tokens,
+                intensity,
+            });
+        }
+        idx = end + 1;
+    }
+    windows.sort_by(|a, b| {
+        b.intensity
+            .partial_cmp(&a.intensity)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    windows.truncate(3);
+    windows
+}
+
+fn benefit_for_anchor(anchor: u32, weights: &[f32; 1440]) -> f32 {
+    let refreshes = [
+        (anchor + 300) % 1440,
+        (anchor + 600) % 1440,
+        (anchor + 900) % 1440,
+    ];
+    let mut score = 0.0;
+    for minute in 0..1440_u32 {
+        let weight = weights[minute as usize];
+        if weight <= 0.0 {
+            continue;
+        }
+        let mut best = 0.0_f32;
+        for refresh in refreshes {
+            let forward = (minute + 1440 - refresh) % 1440;
+            let signed_distance = forward.min((refresh + 1440 - minute) % 1440) as f32;
+            let before_or_inside_bonus = if forward <= 180 { 1.25 } else { 1.0 };
+            let closeness = (1.0 - (signed_distance / 240.0)).max(0.0);
+            best = best.max(closeness * before_or_inside_bonus);
+        }
+        score += weight * best;
+    }
+    score
+}
+
+fn build_scheduler_recommendation(events: &[SchedulerEvent]) -> Option<SchedulerRecommendation> {
+    if events.is_empty() {
+        return None;
+    }
+    let weights = build_minute_weights(events);
+    let mut best_anchor = 0_u32;
+    let mut best_score = -1.0_f32;
+    for anchor in 0..1440_u32 {
+        let score = benefit_for_anchor(anchor, &weights);
+        if score > best_score {
+            best_score = score;
+            best_anchor = anchor;
+        }
+    }
+    let windows = high_intensity_windows(&weights, events);
+    let reason = if windows.is_empty() {
+        "当前本地日志仍较少，系统基于已有请求时间生成临时估计。".to_string()
+    } else {
+        let parts = windows
+            .iter()
+            .map(|window| format!("{} - {}", window.start_time, window.end_time))
+            .collect::<Vec<_>>()
+            .join("、");
+        format!(
+            "根据本地日志识别到你常在 {} 使用 Codex。建议在 {} 触发一次极小请求，使第一次刷新约为 {}，后续刷新约为 {}、{}。该功能不会增加额度，只优化 5 小时配额窗口起点。",
+            parts,
+            minute_label(best_anchor),
+            add_minutes_label(best_anchor, 300),
+            add_minutes_label(best_anchor, 600),
+            add_minutes_label(best_anchor, 900)
+        )
+    };
+
+    Some(SchedulerRecommendation {
+        recommended_anchor_time: minute_label(best_anchor),
+        expected_first_refresh_time: add_minutes_label(best_anchor, 300),
+        expected_second_refresh_time: add_minutes_label(best_anchor, 600),
+        expected_third_refresh_time: add_minutes_label(best_anchor, 900),
+        benefit_score: best_score.max(0.0),
+        reason,
+        high_intensity_windows: windows,
+    })
+}
+
+pub fn load_scheduler_config(home: &Path) -> Result<SchedulerConfig> {
+    let path = scheduler_config_file(home);
+    if !path.exists() {
+        return Ok(SchedulerConfig::default());
+    }
+    Ok(serde_json::from_str(&std::fs::read_to_string(path)?)?)
+}
+
+pub fn save_scheduler_config(home: &Path, config: &SchedulerConfig) -> Result<SchedulerConfig> {
+    ensure_dir(&config_dir(home))?;
+    write_json(&scheduler_config_file(home), &serde_json::to_value(config)?)?;
+    Ok(config.clone())
+}
+
+pub fn get_scheduler_history(home: &Path) -> Result<Vec<SchedulerHistoryEntry>> {
+    let path = scheduler_history_file(home);
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    let file = File::open(path)?;
+    let reader = BufReader::new(file);
+    let mut entries = Vec::new();
+    for line in reader.lines() {
+        let line = line?;
+        if line.trim().is_empty() {
+            continue;
+        }
+        if let Ok(entry) = serde_json::from_str::<SchedulerHistoryEntry>(&line) {
+            entries.push(entry);
+        }
+    }
+    entries.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+    Ok(entries)
+}
+
+fn append_scheduler_history(home: &Path, entry: &SchedulerHistoryEntry) -> Result<()> {
+    ensure_dir(&config_dir(home))?;
+    use std::io::Write;
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(scheduler_history_file(home))?;
+    writeln!(file, "{}", serde_json::to_string(entry)?)?;
+    Ok(())
+}
+
+pub fn analyze_smart_quota_scheduler(
+    home: &Path,
+    account_name: Option<String>,
+) -> Result<SchedulerAnalysis> {
+    let (events, warnings) = collect_scheduler_events(home)?;
+    if events.is_empty() {
+        return Ok(scheduler_default_analysis(Some(
+            "本地 Codex 日志中暂未找到可用于调度分析的 token 事件".to_string(),
+        )));
+    }
+    let sessions = build_scheduler_sessions(&events);
+    let maturity = scheduler_maturity(&events, &sessions);
+    let recommendation = build_scheduler_recommendation(&events);
+    let heatmap = build_scheduler_heatmap(&events);
+
+    Ok(SchedulerAnalysis {
+        fetched_at: Utc::now().to_rfc3339(),
+        account_name,
+        maturity,
+        recommendation,
+        heatmap,
+        warning: if warnings.is_empty() {
+            None
+        } else {
+            Some(format!(
+                "{} 个会话文件读取失败，分析结果可能不完整",
+                warnings.len()
+            ))
+        },
+    })
+}
+
+fn should_show_scheduler_invite(config: &SchedulerConfig, analysis: &SchedulerAnalysis) -> bool {
+    if config.enabled || !config.invite_popup_enabled || config.never_show_invite {
+        return false;
+    }
+    if let Some(until) = &config.dismissed_invite_until {
+        if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(until) {
+            if dt.with_timezone(&Utc) > Utc::now() {
+                return false;
+            }
+        }
+    }
+    let maturity = &analysis.maturity;
+    analysis.recommendation.is_some()
+        && (maturity.active_usage_days >= 7 || maturity.confidence_score >= 70)
+        && maturity.confidence_score >= 45
+}
+
+pub fn get_scheduler_state(home: &Path) -> Result<SchedulerState> {
+    let config = load_scheduler_config(home)?;
+    let analysis = if config.passive_analysis_enabled {
+        analyze_smart_quota_scheduler(home, None)?
+    } else {
+        scheduler_default_analysis(Some("本地被动分析已关闭".to_string()))
+    };
+    let history = get_scheduler_history(home)?
+        .into_iter()
+        .take(20)
+        .collect::<Vec<_>>();
+    let should_show_invite = should_show_scheduler_invite(&config, &analysis);
+    Ok(SchedulerState {
+        config,
+        analysis,
+        history,
+        should_show_invite,
+    })
+}
+
+fn time_to_minutes(value: &str) -> Option<u32> {
+    let (hour, minute) = value.split_once(':')?;
+    let hour = hour.parse::<u32>().ok()?;
+    let minute = minute.parse::<u32>().ok()?;
+    if hour < 24 && minute < 60 {
+        Some(hour * 60 + minute)
+    } else {
+        None
+    }
+}
+
+fn today_key() -> String {
+    Local::now().date_naive().to_string()
+}
+
+pub async fn run_smart_quota_scheduler_once(home: &Path) -> Result<SchedulerHistoryEntry> {
+    let mut config = load_scheduler_config(home)?;
+    let analysis = analyze_smart_quota_scheduler(home, None)?;
+    let recommendation = analysis.recommendation.clone();
+    let mode = config.mode.clone();
+    let final_anchor_time = match mode {
+        SchedulerMode::Manual => config.manual_anchor_time.clone(),
+        SchedulerMode::Recommended => recommendation
+            .as_ref()
+            .map(|r| r.recommended_anchor_time.clone()),
+    }
+    .ok_or_else(|| anyhow::anyhow!("智能配额调度缺少可用触发时间"))?;
+
+    let date = today_key();
+    let now = Local::now();
+    let anchor_minutes = time_to_minutes(&final_anchor_time)
+        .ok_or_else(|| anyhow::anyhow!("触发时间格式无效: {}", final_anchor_time))?;
+    let now_minutes = now.hour() * 60 + now.minute();
+    let missed = now_minutes > anchor_minutes + 30;
+    let too_early = now_minutes + 1 < anchor_minutes;
+    let active_account = list_accounts(home)?
+        .into_iter()
+        .find(|account| account.is_active == Some(true));
+    let account_name = active_account.as_ref().map(|account| account.name.clone());
+    let mut status = SchedulerResultStatus::Success;
+    let mut error_message = None;
+
+    if !config.enabled {
+        status = SchedulerResultStatus::SkippedInsufficientData;
+        error_message = Some("智能配额调度未开启".to_string());
+    } else if analysis.maturity.active_usage_days < 3 && mode == SchedulerMode::Recommended {
+        status = SchedulerResultStatus::SkippedInsufficientData;
+        error_message = Some("数据不足，未执行自动触发".to_string());
+    } else if missed {
+        status = SchedulerResultStatus::SkippedMissedWindow;
+        error_message = Some("错过触发时间超过 30 分钟，今天跳过".to_string());
+    } else if too_early {
+        status = SchedulerResultStatus::SkippedMissedWindow;
+        error_message = Some("尚未到达触发时间".to_string());
+    } else if let Some(account) = &active_account {
+        if !matches!(
+            account.health,
+            AccountHealth::Healthy | AccountHealth::ExpiringSoon
+        ) {
+            status = SchedulerResultStatus::SkippedAccountUnhealthy;
+            error_message = Some("当前账号状态不适合自动触发".to_string());
+        }
+    } else {
+        status = SchedulerResultStatus::SkippedAccountUnhealthy;
+        error_message = Some("未找到当前激活账号".to_string());
+    }
+
+    if let Some(name) = &account_name {
+        let account_config = config.per_account.entry(name.clone()).or_default();
+        if account_config.last_triggered_date.as_deref() == Some(&date) {
+            status = SchedulerResultStatus::SkippedAlreadyTriggered;
+            error_message = Some("今天已经触发过".to_string());
+        }
+        if account_config.auto_paused {
+            status = SchedulerResultStatus::SkippedAccountUnhealthy;
+            error_message = Some("该账号的智能配额调度已自动暂停".to_string());
+        }
+    }
+
+    let before_usage_snapshot = if status == SchedulerResultStatus::Success {
+        match fetch_usage_for_active_account(home).await {
+            Ok(usage) => Some(usage),
+            Err(error) => {
+                status = SchedulerResultStatus::FailedNetwork;
+                error_message = Some(format!("触发前用量查询失败: {error}"));
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    let actual_trigger_time = if status == SchedulerResultStatus::Success {
+        match trigger_minimal_codex_request() {
+            Ok(()) => Some(Utc::now().to_rfc3339()),
+            Err(error) => {
+                status = SchedulerResultStatus::FailedUnknown;
+                error_message = Some(error.to_string());
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    let after_usage_snapshot = if status == SchedulerResultStatus::Success {
+        fetch_usage_for_active_account(home).await.ok()
+    } else {
+        None
+    };
+
+    if let Some(name) = &account_name {
+        let account_config = config.per_account.entry(name.clone()).or_default();
+        if matches!(status, SchedulerResultStatus::Success) {
+            account_config.last_triggered_date = Some(date.clone());
+            account_config.consecutive_failures = 0;
+        } else if matches!(
+            status,
+            SchedulerResultStatus::FailedAuth
+                | SchedulerResultStatus::FailedNetwork
+                | SchedulerResultStatus::FailedUnknown
+        ) {
+            account_config.consecutive_failures += 1;
+            if account_config.consecutive_failures >= 3 {
+                account_config.auto_paused = true;
+            }
+        }
+    }
+    let _ = save_scheduler_config(home, &config);
+
+    let entry = SchedulerHistoryEntry {
+        id: format!(
+            "scheduler-{}-{}",
+            Utc::now().timestamp_millis(),
+            account_name
+                .clone()
+                .unwrap_or_else(|| "unknown".to_string())
+        ),
+        account_id: None,
+        account_email: account_name.clone(),
+        date,
+        mode,
+        recommended_anchor_time: recommendation
+            .as_ref()
+            .map(|r| r.recommended_anchor_time.clone()),
+        manual_anchor_time: config.manual_anchor_time.clone(),
+        final_anchor_time,
+        expected_first_refresh_time: recommendation
+            .as_ref()
+            .map(|r| r.expected_first_refresh_time.clone()),
+        expected_second_refresh_time: recommendation
+            .as_ref()
+            .map(|r| r.expected_second_refresh_time.clone()),
+        expected_third_refresh_time: recommendation
+            .as_ref()
+            .map(|r| r.expected_third_refresh_time.clone()),
+        actual_trigger_time,
+        before_usage_snapshot,
+        after_usage_snapshot,
+        detected_refresh_time: None,
+        confidence_score: analysis.maturity.confidence_score,
+        benefit_score: recommendation.as_ref().map(|r| r.benefit_score),
+        data_maturity_level: analysis.maturity.level.clone(),
+        active_usage_days: analysis.maturity.active_usage_days,
+        result_status: status,
+        error_message,
+        created_at: Utc::now().to_rfc3339(),
+    };
+    append_scheduler_history(home, &entry)?;
+    Ok(entry)
+}
+
+fn trigger_minimal_codex_request() -> Result<()> {
+    let mut command = Command::new("codex");
+    command
+        .args(["exec", "--skip-git-repo-check", "Return OK."])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+
+    #[cfg(target_os = "windows")]
+    command.creation_flags(CREATE_NO_WINDOW);
+
+    let status = command.status().context("执行 Codex 极小请求失败")?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(anyhow::anyhow!("Codex 极小请求退出码异常: {}", status))
+    }
+}
+
 // ── Backup ──
 
 fn backup_auth(home: &Path, retention: u32) -> Result<PathBuf> {
@@ -1647,5 +2355,6 @@ pub fn get_app_state(custom_home: Option<&str>) -> Result<AppState> {
         logs: Vec::new(), // Logs are ephemeral, populated at runtime
         settings,
         switch_history: get_switch_history(&actual_home).unwrap_or_default(),
+        scheduler: get_scheduler_state(&actual_home)?,
     })
 }

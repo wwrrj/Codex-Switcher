@@ -60,7 +60,9 @@ fn show_tray_menu_at(app: &AppHandle, position: PhysicalPosition<f64>) -> tauri:
     if let Some(window) = app.get_webview_window("tray-menu") {
         let x = (position.x as i32 - TRAY_MENU_WIDTH + 12).max(8);
         let y = (position.y as i32 - TRAY_MENU_HEIGHT - 8).max(8);
-        window.set_size(Size::Physical((TRAY_MENU_WIDTH as u32, TRAY_MENU_HEIGHT as u32).into()))?;
+        window.set_size(Size::Physical(
+            (TRAY_MENU_WIDTH as u32, TRAY_MENU_HEIGHT as u32).into(),
+        ))?;
         window.set_position(Position::Physical(PhysicalPosition::new(x, y)))?;
         window.show()?;
         window.set_focus()?;

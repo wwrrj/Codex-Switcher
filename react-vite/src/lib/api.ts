@@ -1,6 +1,6 @@
 import { invoke } from '@tauri-apps/api/core'
 import { isPermissionGranted, requestPermission, sendNotification } from '@tauri-apps/plugin-notification'
-import type { AccountMeta, CodexAuthStatus, CodexUsageInfo, AppSettings, AppLog, AppState, SubscriptionInfo, SubscriptionPlan, TokenUsageSummary, NewAccountLoginPreparation, SwitchHistoryEntry, SwitchRecommendation } from './types'
+import type { AccountMeta, CodexAuthStatus, CodexUsageInfo, AppSettings, AppLog, AppState, SubscriptionInfo, SubscriptionPlan, TokenUsageSummary, NewAccountLoginPreparation, SwitchHistoryEntry, SwitchRecommendation, SchedulerConfig, SchedulerHistoryEntry, SchedulerState } from './types'
 
 // ── Frontend-only log management ──
 
@@ -71,6 +71,22 @@ export async function switchAccount(name: string): Promise<void> {
 
 export async function getSwitchHistory(): Promise<SwitchHistoryEntry[]> {
   return await invoke<SwitchHistoryEntry[]>('get_switch_history')
+}
+
+export async function getSchedulerState(): Promise<SchedulerState> {
+  return await invoke<SchedulerState>('get_scheduler_state')
+}
+
+export async function saveSchedulerConfig(config: SchedulerConfig): Promise<SchedulerState> {
+  const state = await invoke<SchedulerState>('save_scheduler_config', { config })
+  addLog('success', '智能配额调度设置已保存')
+  return state
+}
+
+export async function runSmartQuotaSchedulerOnce(): Promise<SchedulerHistoryEntry> {
+  const entry = await invoke<SchedulerHistoryEntry>('run_smart_quota_scheduler_once')
+  addLog(entry.resultStatus === 'success' ? 'success' : 'warning', `智能配额调度：${entry.resultStatus}`)
+  return entry
 }
 
 export async function refreshTrayMenu(): Promise<void> {

@@ -289,6 +289,202 @@ pub struct AppState {
     pub logs: Vec<AppLog>,
     pub settings: AppSettings,
     pub switch_history: Vec<SwitchHistoryEntry>,
+    pub scheduler: SchedulerState,
+}
+
+// ── Smart quota scheduler ──
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum SchedulerMode {
+    Recommended,
+    Manual,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum SchedulerAccountScope {
+    Current,
+    AllEnabled,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum SchedulerMaturityLevel {
+    Insufficient,
+    Temporary,
+    Usable,
+    Stable,
+    Reliable,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum SchedulerResultStatus {
+    Success,
+    SkippedAlreadyTriggered,
+    SkippedMissedWindow,
+    SkippedAccountUnhealthy,
+    SkippedInsufficientData,
+    FailedNetwork,
+    FailedAuth,
+    FailedUnknown,
+    PossiblyEffective,
+    NotEffective,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SchedulerAccountConfig {
+    pub enabled: bool,
+    pub mode: SchedulerMode,
+    pub manual_anchor_time: Option<String>,
+    pub max_triggers_per_day: u32,
+    pub last_triggered_date: Option<String>,
+    pub auto_paused: bool,
+    pub consecutive_failures: u32,
+    pub consecutive_not_effective: u32,
+}
+
+impl Default for SchedulerAccountConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            mode: SchedulerMode::Recommended,
+            manual_anchor_time: None,
+            max_triggers_per_day: 1,
+            last_triggered_date: None,
+            auto_paused: false,
+            consecutive_failures: 0,
+            consecutive_not_effective: 0,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SchedulerConfig {
+    pub enabled: bool,
+    pub passive_analysis_enabled: bool,
+    pub invite_popup_enabled: bool,
+    pub dismissed_invite_until: Option<String>,
+    pub never_show_invite: bool,
+    pub mode: SchedulerMode,
+    pub manual_anchor_time: Option<String>,
+    pub account_scope: SchedulerAccountScope,
+    pub per_account: std::collections::BTreeMap<String, SchedulerAccountConfig>,
+}
+
+impl Default for SchedulerConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            passive_analysis_enabled: true,
+            invite_popup_enabled: true,
+            dismissed_invite_until: None,
+            never_show_invite: false,
+            mode: SchedulerMode::Recommended,
+            manual_anchor_time: None,
+            account_scope: SchedulerAccountScope::Current,
+            per_account: std::collections::BTreeMap::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SchedulerHeatmapBucket {
+    pub day: String,
+    pub minute_of_day: u32,
+    pub label: String,
+    pub intensity: f32,
+    pub requests: u32,
+    pub tokens: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SchedulerUsageWindow {
+    pub start_time: String,
+    pub end_time: String,
+    pub active_days: u32,
+    pub requests: u32,
+    pub tokens: i64,
+    pub intensity: f32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SchedulerRecommendation {
+    pub recommended_anchor_time: String,
+    pub expected_first_refresh_time: String,
+    pub expected_second_refresh_time: String,
+    pub expected_third_refresh_time: String,
+    pub benefit_score: f32,
+    pub reason: String,
+    pub high_intensity_windows: Vec<SchedulerUsageWindow>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SchedulerMaturity {
+    pub active_usage_days: u32,
+    pub total_sessions: u32,
+    pub total_requests: u32,
+    pub total_tokens: i64,
+    pub weekday_active_days: u32,
+    pub weekend_active_days: u32,
+    pub confidence_score: u32,
+    pub remaining_active_days_to_optimal: u32,
+    pub estimated_calendar_days_to_optimal: u32,
+    pub level: SchedulerMaturityLevel,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SchedulerAnalysis {
+    pub fetched_at: String,
+    pub account_name: Option<String>,
+    pub maturity: SchedulerMaturity,
+    pub recommendation: Option<SchedulerRecommendation>,
+    pub heatmap: Vec<SchedulerHeatmapBucket>,
+    pub warning: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SchedulerHistoryEntry {
+    pub id: String,
+    pub account_id: Option<String>,
+    pub account_email: Option<String>,
+    pub date: String,
+    pub mode: SchedulerMode,
+    pub recommended_anchor_time: Option<String>,
+    pub manual_anchor_time: Option<String>,
+    pub final_anchor_time: String,
+    pub expected_first_refresh_time: Option<String>,
+    pub expected_second_refresh_time: Option<String>,
+    pub expected_third_refresh_time: Option<String>,
+    pub actual_trigger_time: Option<String>,
+    pub before_usage_snapshot: Option<CodexUsageInfo>,
+    pub after_usage_snapshot: Option<CodexUsageInfo>,
+    pub detected_refresh_time: Option<String>,
+    pub confidence_score: u32,
+    pub benefit_score: Option<f32>,
+    pub data_maturity_level: SchedulerMaturityLevel,
+    pub active_usage_days: u32,
+    pub result_status: SchedulerResultStatus,
+    pub error_message: Option<String>,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SchedulerState {
+    pub config: SchedulerConfig,
+    pub analysis: SchedulerAnalysis,
+    pub history: Vec<SchedulerHistoryEntry>,
+    pub should_show_invite: bool,
 }
 
 // ── Account metadata file (stored alongside auth.json) ──

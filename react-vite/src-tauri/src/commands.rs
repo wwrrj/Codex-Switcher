@@ -92,8 +92,7 @@ pub async fn prepare_new_account_login() -> Result<NewAccountLoginPreparation, S
 pub async fn remove_account(name: String, force: Option<bool>) -> Result<(), String> {
     blocking(move || {
         let actual_home = actual_home()?;
-        core::remove_account(&actual_home, &name, force.unwrap_or(false))
-            .map_err(|e| e.to_string())
+        core::remove_account(&actual_home, &name, force.unwrap_or(false)).map_err(|e| e.to_string())
     })
     .await
 }
@@ -123,6 +122,33 @@ pub async fn get_switch_history() -> Result<Vec<SwitchHistoryEntry>, String> {
         core::get_switch_history(&actual_home).map_err(|e| e.to_string())
     })
     .await
+}
+
+#[tauri::command]
+pub async fn get_scheduler_state() -> Result<SchedulerState, String> {
+    blocking(move || {
+        let actual_home = actual_home()?;
+        core::get_scheduler_state(&actual_home).map_err(|e| e.to_string())
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn save_scheduler_config(config: SchedulerConfig) -> Result<SchedulerState, String> {
+    blocking(move || {
+        let actual_home = actual_home()?;
+        core::save_scheduler_config(&actual_home, &config).map_err(|e| e.to_string())?;
+        core::get_scheduler_state(&actual_home).map_err(|e| e.to_string())
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn run_smart_quota_scheduler_once() -> Result<SchedulerHistoryEntry, String> {
+    let actual_home = blocking(actual_home).await?;
+    core::run_smart_quota_scheduler_once(&actual_home)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]

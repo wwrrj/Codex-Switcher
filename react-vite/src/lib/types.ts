@@ -139,6 +139,128 @@ export interface SwitchRecommendation {
   reason: string;
 }
 
+// ── Smart quota scheduler ──
+
+export type SchedulerMode = "recommended" | "manual";
+export type SchedulerAccountScope = "current" | "all_enabled";
+export type SchedulerMaturityLevel = "insufficient" | "temporary" | "usable" | "stable" | "reliable";
+export type SchedulerResultStatus =
+  | "success"
+  | "skipped_already_triggered"
+  | "skipped_missed_window"
+  | "skipped_account_unhealthy"
+  | "skipped_insufficient_data"
+  | "failed_network"
+  | "failed_auth"
+  | "failed_unknown"
+  | "possibly_effective"
+  | "not_effective";
+
+export interface SchedulerAccountConfig {
+  enabled: boolean;
+  mode: SchedulerMode;
+  manualAnchorTime?: string;
+  maxTriggersPerDay: number;
+  lastTriggeredDate?: string;
+  autoPaused: boolean;
+  consecutiveFailures: number;
+  consecutiveNotEffective: number;
+}
+
+export interface SchedulerConfig {
+  enabled: boolean;
+  passiveAnalysisEnabled: boolean;
+  invitePopupEnabled: boolean;
+  dismissedInviteUntil?: string;
+  neverShowInvite: boolean;
+  mode: SchedulerMode;
+  manualAnchorTime?: string;
+  accountScope: SchedulerAccountScope;
+  perAccount: Record<string, SchedulerAccountConfig>;
+}
+
+export interface SchedulerHeatmapBucket {
+  day: string;
+  minuteOfDay: number;
+  label: string;
+  intensity: number;
+  requests: number;
+  tokens: number;
+}
+
+export interface SchedulerUsageWindow {
+  startTime: string;
+  endTime: string;
+  activeDays: number;
+  requests: number;
+  tokens: number;
+  intensity: number;
+}
+
+export interface SchedulerRecommendation {
+  recommendedAnchorTime: string;
+  expectedFirstRefreshTime: string;
+  expectedSecondRefreshTime: string;
+  expectedThirdRefreshTime: string;
+  benefitScore: number;
+  reason: string;
+  highIntensityWindows: SchedulerUsageWindow[];
+}
+
+export interface SchedulerMaturity {
+  activeUsageDays: number;
+  totalSessions: number;
+  totalRequests: number;
+  totalTokens: number;
+  weekdayActiveDays: number;
+  weekendActiveDays: number;
+  confidenceScore: number;
+  remainingActiveDaysToOptimal: number;
+  estimatedCalendarDaysToOptimal: number;
+  level: SchedulerMaturityLevel;
+}
+
+export interface SchedulerAnalysis {
+  fetchedAt: string;
+  accountName?: string;
+  maturity: SchedulerMaturity;
+  recommendation?: SchedulerRecommendation;
+  heatmap: SchedulerHeatmapBucket[];
+  warning?: string;
+}
+
+export interface SchedulerHistoryEntry {
+  id: string;
+  accountId?: string;
+  accountEmail?: string;
+  date: string;
+  mode: SchedulerMode;
+  recommendedAnchorTime?: string;
+  manualAnchorTime?: string;
+  finalAnchorTime: string;
+  expectedFirstRefreshTime?: string;
+  expectedSecondRefreshTime?: string;
+  expectedThirdRefreshTime?: string;
+  actualTriggerTime?: string;
+  beforeUsageSnapshot?: CodexUsageInfo;
+  afterUsageSnapshot?: CodexUsageInfo;
+  detectedRefreshTime?: string;
+  confidenceScore: number;
+  benefitScore?: number;
+  dataMaturityLevel: SchedulerMaturityLevel;
+  activeUsageDays: number;
+  resultStatus: SchedulerResultStatus;
+  errorMessage?: string;
+  createdAt: string;
+}
+
+export interface SchedulerState {
+  config: SchedulerConfig;
+  analysis: SchedulerAnalysis;
+  history: SchedulerHistoryEntry[];
+  shouldShowInvite: boolean;
+}
+
 export interface CodexAuthStatus {
   codexHome: string;
   authPath: string;
@@ -178,6 +300,7 @@ export interface AppState {
   logs: AppLog[];
   settings: AppSettings;
   switchHistory: SwitchHistoryEntry[];
+  scheduler: SchedulerState;
 }
 
 export interface RefreshProgress {

@@ -13,8 +13,20 @@ import RenameAccountDialog from '@/components/RenameAccountDialog'
 import SetSubscriptionDialog from '@/components/SetSubscriptionDialog'
 import ToastContainer from '@/components/ToastContainer'
 import TrayMenu from '@/components/TrayMenu'
+import SmartQuotaInviteDialog from '@/components/SmartQuotaInviteDialog'
 
 const SIDEBAR_COLLAPSED_KEY = 'codex-switcher:sidebar-collapsed'
+const SCHEDULER_LAST_ATTEMPT_KEY = 'codex-switcher:scheduler-last-attempt'
+
+function isWithinSchedulerWindow(anchor?: string): boolean {
+  if (!anchor) return false
+  const [hour, minute] = anchor.split(':').map(Number)
+  if (!Number.isFinite(hour) || !Number.isFinite(minute)) return false
+  const now = new Date()
+  const current = now.getHours() * 60 + now.getMinutes()
+  const target = hour * 60 + minute
+  return current >= target && current <= target + 30
+}
 
 export default function App() {
   const windowLabel = getCurrentWindow().label
@@ -34,6 +46,8 @@ function MainApp() {
   const refreshUsageIntervalMinutes = useAppStore((s) => s.settings.refreshUsageIntervalMinutes)
   const refreshAllUsage = useAppStore((s) => s.refreshAllUsage)
   const refreshTokenUsage = useAppStore((s) => s.refreshTokenUsage)
+  const scheduler = useAppStore((s) => s.scheduler)
+  const runSchedulerOnce = useAppStore((s) => s.runSchedulerOnce)
   const addToast = useAppStore((s) => s.addToast)
 
   const [settingsOpen, setSettingsOpen] = useState(false)
@@ -44,6 +58,7 @@ function MainApp() {
   const [addOpen, setAddOpen] = useState(false)
   const [renameOpen, setRenameOpen] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState<{ name: string; isActive: boolean } | null>(null)
+  const [schedulerInviteOpen, setSchedulerInviteOpen] = useState(false)
 
   useEffect(() => {
     init()
@@ -87,6 +102,32 @@ function MainApp() {
       document.removeEventListener('visibilitychange', refreshCurrentTokenUsage)
     }
   }, [refreshTokenUsage])
+
+  useEffect(() => {
+    if (scheduler.shouldShowInvite) {
+      const timer = window.setTimeout(() => setSchedulerInviteOpen(true), 800)
+      return () => window.clearTimeout(timer)
+    }
+  }, [scheduler.shouldShowInvite])
+
+  useEffect(() => {
+    if (!scheduler.config.enabled) return
+    const check = () => {
+      const anchor = scheduler.config.mode === 'manual'
+        ? scheduler.config.manualAnchorTime
+        : scheduler.analysis.recommendation?.recommendedAnchorTime
+      const today = new Date().toISOString().slice(0, 10)
+      const attemptKey = `${today}:${anchor ?? 'none'}`
+      const alreadyAttempted = window.localStorage.getItem(SCHEDULER_LAST_ATTEMPT_KEY) === attemptKey
+      if (document.visibilityState === 'visible' && isWithinSchedulerWindow(anchor) && !alreadyAttempted) {
+        window.localStorage.setItem(SCHEDULER_LAST_ATTEMPT_KEY, attemptKey)
+        void runSchedulerOnce()
+      }
+    }
+    const timer = window.setInterval(check, 60_000)
+    check()
+    return () => window.clearInterval(timer)
+  }, [runSchedulerOnce, scheduler.config.enabled, scheduler.config.mode, scheduler.config.manualAnchorTime])
 
   const handleDelete = useCallback(() => {
     const active = useAppStore.getState().activeAccount
@@ -147,6 +188,11 @@ function MainApp() {
         onClose={() => setRenameOpen(false)}
       />
       <SetSubscriptionDialog />
+      <SmartQuotaInviteDialog
+        open={schedulerInviteOpen}
+        onClose={() => setSchedulerInviteOpen(false)}
+        onOpenSettings={() => setSettingsOpen(true)}
+      />
 
       <ToastContainer />
     </div>

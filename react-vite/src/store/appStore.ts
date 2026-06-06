@@ -1,10 +1,40 @@
 import { create } from 'zustand'
-import type { AccountMeta, CodexAuthStatus, AppLog, AppSettings, RefreshProgress, ToastItem, SubscriptionPlan, CodexUsageInfo, DailyUsageEntry, TokenUsageSummary, SwitchHistoryEntry } from '@/lib/types'
+import type { AccountMeta, CodexAuthStatus, AppLog, AppSettings, RefreshProgress, ToastItem, SubscriptionPlan, CodexUsageInfo, DailyUsageEntry, TokenUsageSummary, SwitchHistoryEntry, SchedulerConfig, SchedulerState } from '@/lib/types'
 import * as api from '@/lib/api'
 import * as usageDb from '@/lib/usageDb'
 
 const USAGE_HISTORY_KEY = 'codex-switcher:daily-usage-history:v1'
 const USAGE_HISTORY_LIMIT_DAYS = 182
+
+const defaultSchedulerState: SchedulerState = {
+  config: {
+    enabled: false,
+    passiveAnalysisEnabled: true,
+    invitePopupEnabled: true,
+    neverShowInvite: false,
+    mode: 'recommended',
+    accountScope: 'current',
+    perAccount: {},
+  },
+  analysis: {
+    fetchedAt: new Date(0).toISOString(),
+    maturity: {
+      activeUsageDays: 0,
+      totalSessions: 0,
+      totalRequests: 0,
+      totalTokens: 0,
+      weekdayActiveDays: 0,
+      weekendActiveDays: 0,
+      confidenceScore: 0,
+      remainingActiveDaysToOptimal: 14,
+      estimatedCalendarDaysToOptimal: 14,
+      level: 'insufficient',
+    },
+    heatmap: [],
+  },
+  history: [],
+  shouldShowInvite: false,
+}
 
 function dateKeyFromIso(iso: string): string {
   const d = new Date(iso)
@@ -93,6 +123,7 @@ interface AppStore {
   usageHistory: DailyUsageEntry[]
   tokenUsage: TokenUsageSummary | null
   switchHistory: SwitchHistoryEntry[]
+  scheduler: SchedulerState
 
   init: () => Promise<void>
   selectAccount: (name: string) => void
@@ -119,6 +150,11 @@ interface AppStore {
   recordUsageSnapshot: (usage: CodexUsageInfo) => void
   refreshTokenUsage: () => Promise<void>
   refreshSwitchHistory: () => Promise<void>
+  refreshScheduler: () => Promise<void>
+  saveSchedulerConfig: (config: SchedulerConfig) => Promise<void>
+  runSchedulerOnce: () => Promise<void>
+  dismissSchedulerInvite: (days?: number) => Promise<void>
+  neverShowSchedulerInvite: () => Promise<void>
 }
 
 export const useAppStore = create<AppStore>((set, get) => ({
@@ -153,6 +189,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
   usageHistory: loadUsageHistory(),
   tokenUsage: null,
   switchHistory: [],
+  scheduler: defaultSchedulerState,
 
   init: async () => {
     set({ loading: true })
@@ -176,6 +213,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
         settings: state.settings,
         theme: state.settings.theme,
         switchHistory: state.switchHistory,
+        scheduler: state.scheduler,
         tokenUsage: cachedTokenUsage,
         loading: false,
       })
@@ -460,6 +498,49 @@ export const useAppStore = create<AppStore>((set, get) => ({
     } catch {
       // History is supplemental and must not interrupt account operations.
     }
+  },
+
+  refreshScheduler: async () => {
+    try {
+      set({ scheduler: await api.getSchedulerState(), logs: api.getLogs() })
+    } catch (e: unknown) {
+      get().addToast('error', e instanceof Error ? e.message : '智能配额调度分析失败')
+    }
+  },
+
+  saveSchedulerConfig: async (config) => {
+    try {
+      const scheduler = await api.saveSchedulerConfig(config)
+      set({ scheduler, logs: api.getLogs() })
+      get().addToast('success', '智能配额调度设置已保存')
+    } catch (e: unknown) {
+      get().addToast('error', e instanceof Error ? e.message : '保存智能配额调度失败')
+      throw e
+    }
+  },
+
+  runSchedulerOnce: async () => {
+    try {
+      await api.runSmartQuotaSchedulerOnce()
+      set({ scheduler: await api.getSchedulerState(), logs: api.getLogs() })
+    } catch (e: unknown) {
+      get().addToast('error', e instanceof Error ? e.message : '智能配额调度执行失败')
+    }
+  },
+
+  dismissSchedulerInvite: async (days = 7) => {
+    const until = new Date(Date.now() + days * 24 * 60 * 60 * 1000).toISOString()
+    await get().saveSchedulerConfig({
+      ...get().scheduler.config,
+      dismissedInviteUntil: until,
+    })
+  },
+
+  neverShowSchedulerInvite: async () => {
+    await get().saveSchedulerConfig({
+      ...get().scheduler.config,
+      neverShowInvite: true,
+    })
   },
 
   getSelectedAccountData: () => {
