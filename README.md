@@ -55,17 +55,13 @@ The screenshots below are taken from the latest build and redacted before publis
 
 | Feature | Description |
 | --- | --- |
-| Multi-account management | Uses email addresses as account names; supports rename, delete, and priority flags |
-| Safe switching workflow | Silently closes Codex, backs up `auth.json`, swaps credentials, and reopens Codex |
-| New-account login guide | Signs out an already-saved active account and waits for fresh credentials |
-| Email and plan detection | Detects email addresses and Free / Plus / Pro / Team subscriptions from local auth data |
-| Official usage queries | Queries Codex usage windows on startup, after switching, and on a timer |
-| Local token statistics | Counts input, cached input, output, and reasoning tokens from local session records |
-| Usage analytics | Daily usage heatmap, today's tokens, total tokens, and a dynamic 14-day chart |
-| Backups and settings | Custom Codex Home, backup retention, refresh interval, and theme selection |
-| Smart switching | Recommends accounts using health, priority, and remaining quota |
-| Tray and alerts | Runs in the tray, offers quick actions, and notifies on usage thresholds |
-| Switch history | Records source, destination, time, and outcome for each switch |
+| Account identity and health | Detects email, subscription plan, Access token expiry, account health, and supports manual subscription overrides |
+| Safe account switching | Silently closes Codex, backs up `auth.json`, swaps credentials, reopens Codex, and records switch history |
+| Usage query and cache | Queries official usage windows, shows cached data on startup, refreshes on startup / switch / schedule, and can restore the previous account after checks |
+| Local token analytics | Scans local Codex records for total, daily, input, cached input, output, and reasoning tokens with heatmaps and 14-day trends |
+| Smart quota scheduling | Learns local usage patterns, recommends or accepts a manual 5-hour quota trigger time, tracks confidence, and pauses when ineffective |
+| Tray and desktop experience | Provides a custom title bar, remembered sidebar state, styled tray menu, quick switching, refresh actions, and app controls |
+| Settings and local data control | Supports custom Codex Home, `CODEX_HOME` detection, backup retention, usage notifications, refresh policy, and theme selection |
 
 ## Quick Start
 
