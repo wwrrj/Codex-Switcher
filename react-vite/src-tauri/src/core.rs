@@ -1204,7 +1204,7 @@ fn build_minute_weights(events: &[SchedulerEvent]) -> [f32; 1440] {
     }
     let newest = events.last().map(|event| event.timestamp.date_naive());
     for event in events {
-        let minute = (event.timestamp.hour() * 60 + event.timestamp.minute()) as usize;
+        let minute = (event.timestamp.hour() * 60 + event.timestamp.minute()) as i32;
         let recency = newest
             .map(|day| (day - event.timestamp.date_naive()).num_days())
             .unwrap_or(0);
@@ -1217,7 +1217,13 @@ fn build_minute_weights(events: &[SchedulerEvent]) -> [f32; 1440] {
         } else {
             0.65
         };
-        weights[minute] += recency_weight * (1.0 + (event.tokens.max(0) as f32 / 1200.0).min(6.0));
+        let base = recency_weight * (1.0 + (event.tokens.max(0) as f32 / 1200.0).min(6.0));
+        for offset in -15..=15 {
+            let idx = (minute + offset + 1440) % 1440;
+            let distance = offset.unsigned_abs() as f32;
+            let smooth = 1.0 - (distance / 18.0);
+            weights[idx as usize] += base * smooth.max(0.12);
+        }
     }
     weights
 }
@@ -1226,28 +1232,32 @@ fn high_intensity_windows(
     weights: &[f32; 1440],
     events: &[SchedulerEvent],
 ) -> Vec<SchedulerUsageWindow> {
-    let max_weight = weights.iter().copied().fold(0.0_f32, f32::max);
+    let mut bucket_weights = [0.0_f32; 48];
+    for minute in 0..1440_usize {
+        bucket_weights[minute / 30] += weights[minute];
+    }
+    let max_weight = bucket_weights.iter().copied().fold(0.0_f32, f32::max);
     if max_weight <= 0.0 {
         return Vec::new();
     }
-    let threshold = (max_weight * 0.35).max(1.0);
+    let threshold = (max_weight * 0.28).max(1.0);
     let mut windows = Vec::new();
     let mut idx = 0_usize;
-    while idx < 1440 {
-        if weights[idx] < threshold {
+    while idx < 48 {
+        if bucket_weights[idx] < threshold {
             idx += 1;
             continue;
         }
         let start = idx;
         let mut end = idx;
         let mut intensity = 0.0_f32;
-        while end < 1440 && weights[end] >= threshold {
-            intensity += weights[end];
+        while end < 48 && bucket_weights[end] >= threshold {
+            intensity += bucket_weights[end];
             end += 1;
         }
-        if end - start >= 10 {
-            let start_u32 = start as u32;
-            let end_u32 = (end as u32).min(1439);
+        if end > start {
+            let start_u32 = (start * 30) as u32;
+            let end_u32 = ((end * 30).saturating_sub(1)).min(1439) as u32;
             let mut active_days = BTreeSet::new();
             let mut requests = 0;
             let mut tokens = 0;
@@ -1320,7 +1330,8 @@ fn build_scheduler_recommendation(events: &[SchedulerEvent]) -> Option<Scheduler
     }
     let windows = high_intensity_windows(&weights, events);
     let reason = if windows.is_empty() {
-        "当前本地日志仍较少，系统基于已有请求时间生成临时估计。".to_string()
+        "已读取到本地 Codex 使用记录，但使用时间较分散，系统会基于已有请求时间生成临时估计。"
+            .to_string()
     } else {
         let parts = windows
             .iter()

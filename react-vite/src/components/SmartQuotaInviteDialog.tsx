@@ -37,7 +37,7 @@ export default function SmartQuotaInviteDialog({ open, onClose, onOpenSettings }
   return (
     <div className="fixed inset-0 z-[70] flex items-center justify-center" data-component="SmartQuotaInviteDialog">
       <div className="absolute inset-0 bg-black/45" onClick={onClose} />
-      <div className="relative w-[620px] max-w-[calc(100vw-32px)] rounded-2xl border border-line bg-bg-surface card-ring shadow-2xl p-5">
+      <div className="relative w-[720px] max-w-[calc(100vw-32px)] max-h-[calc(100vh-48px)] overflow-y-auto rounded-2xl border border-line bg-bg-surface card-ring shadow-2xl p-5">
         <button
           onClick={onClose}
           className="absolute right-3 top-3 w-7 h-7 rounded-md flex items-center justify-center text-fg-muted hover:text-fg hover:bg-bg-hover"

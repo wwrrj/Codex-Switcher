@@ -221,7 +221,7 @@ function SchedulerInfoPopover() {
 
 export function SchedulerMiniHeatmap({ buckets }: { buckets: SchedulerHeatmapBucket[] }) {
   const recentDays = useMemo(() => {
-    const days = Array.from(new Set(buckets.map((bucket) => bucket.day))).sort().slice(-14)
+    const days = Array.from(new Set(buckets.map((bucket) => bucket.day))).sort().slice(-30)
     return days
   }, [buckets])
   const byKey = useMemo(() => {
@@ -230,6 +230,12 @@ export function SchedulerMiniHeatmap({ buckets }: { buckets: SchedulerHeatmapBuc
     return map
   }, [buckets])
   const slots = Array.from({ length: 48 }, (_, index) => index * 30)
+  const displayMax = useMemo(() => {
+    const daySet = new Set(recentDays)
+    return buckets
+      .filter((bucket) => daySet.has(bucket.day))
+      .reduce((max, bucket) => Math.max(max, bucket.intensity), 0)
+  }, [buckets, recentDays])
 
   if (recentDays.length === 0) {
     return (
@@ -252,12 +258,22 @@ export function SchedulerMiniHeatmap({ buckets }: { buckets: SchedulerHeatmapBuc
               {slots.map((minute) => {
                 const b0 = byKey.get(`${day}:${minute}`)
                 const b1 = byKey.get(`${day}:${minute + 15}`)
-                const intensity = Math.max(b0?.intensity ?? 0, b1?.intensity ?? 0)
+                const rawIntensity = Math.max(b0?.intensity ?? 0, b1?.intensity ?? 0)
+                const hasData = Boolean(b0 || b1)
+                const intensity = displayMax > 0 ? rawIntensity / displayMax : 0
                 return (
                   <span
                     key={minute}
-                    className="h-2 rounded-[2px] border border-primary/10"
-                    style={{ backgroundColor: `hsl(var(--primary) / ${0.08 + intensity * 0.82})` }}
+                    title={`${day} ${String(Math.floor(minute / 60)).padStart(2, '0')}:${String(minute % 60).padStart(2, '0')}`}
+                    className="h-2 rounded-[2px] border"
+                    style={{
+                      backgroundColor: hasData
+                        ? `hsl(var(--primary) / ${0.18 + intensity * 0.82})`
+                        : 'hsl(var(--bg-elevated) / 0.35)',
+                      borderColor: hasData
+                        ? `hsl(var(--primary) / ${0.22 + intensity * 0.5})`
+                        : 'hsl(var(--line-subtle) / 0.5)',
+                    }}
                   />
                 )
               })}
