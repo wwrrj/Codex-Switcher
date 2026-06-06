@@ -220,14 +220,14 @@ function ToggleRow({ label, checked, onChange }: { label: string; checked: boole
       <button
         onClick={() => onChange(!checked)}
         className={cn(
-          'relative w-8 h-[18px] rounded-full transition-colors shrink-0',
+          'relative w-[42px] h-6 rounded-full transition-colors shrink-0',
           checked ? 'bg-primary' : 'bg-bg-elevated border border-line'
         )}
       >
         <span
           className={cn(
-            'absolute top-[2px] w-[14px] h-[14px] rounded-full bg-white shadow-sm transition-transform',
-            checked ? 'translate-x-[16px]' : 'translate-x-[2px]'
+            'absolute top-[3px] left-[3px] w-[18px] h-[18px] rounded-full bg-white shadow-sm transition-transform',
+            checked && 'translate-x-[18px]'
           )}
         />
       </button>
