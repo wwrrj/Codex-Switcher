@@ -41,6 +41,14 @@ pub async fn detect_codex_auth(custom_home: Option<String>) -> Result<CodexAuthS
 }
 
 #[tauri::command]
+pub async fn refresh_active_auth_tokens() -> Result<CodexAuthStatus, String> {
+    let actual_home = blocking(actual_home).await?;
+    core::refresh_active_auth_tokens(&actual_home, true)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 pub async fn list_accounts(custom_home: Option<String>) -> Result<Vec<AccountMeta>, String> {
     blocking(move || {
         let home = core::codex_home(custom_home.as_deref()).map_err(|e| e.to_string())?;

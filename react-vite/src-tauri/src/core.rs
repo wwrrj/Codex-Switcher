@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use chrono::{Local, NaiveDate, Utc};
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, USER_AGENT};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
@@ -18,6 +18,9 @@ use std::os::windows::process::CommandExt;
 
 #[cfg(target_os = "windows")]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+const CODEX_REFRESH_TOKEN_URL: &str = "https://auth.openai.com/oauth/token";
+const CODEX_OAUTH_CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
 
 // ── Path helpers ──
 
@@ -143,6 +146,95 @@ fn auth_token_infos(auth_json: &Value) -> Vec<AuthTokenInfo> {
         token_info("id_token", id_token),
         token_info("refresh_token", refresh_token),
     ]
+}
+
+#[derive(Debug, Serialize)]
+struct RefreshTokenRequest {
+    client_id: &'static str,
+    grant_type: &'static str,
+    refresh_token: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct RefreshTokenResponse {
+    id_token: Option<String>,
+    access_token: Option<String>,
+    refresh_token: Option<String>,
+}
+
+fn should_refresh_auth(auth_json: &Value, force: bool) -> bool {
+    if force {
+        return true;
+    }
+    let access_token = string_at_path(auth_json, &["tokens", "access_token"])
+        .or_else(|| string_at_path(auth_json, &["access_token"]));
+    let Some(token) = access_token else {
+        return false;
+    };
+    let Some(exp) = jwt_expires_at(token) else {
+        return false;
+    };
+    exp - Utc::now().timestamp() <= 24 * 60 * 60
+}
+
+fn should_refresh_auth_file(auth_file: &Path, force: bool) -> Result<bool> {
+    Ok(should_refresh_auth(&read_json(auth_file)?, force))
+}
+
+fn upsert_token_field(auth_json: &mut Value, key: &str, token: Option<String>) {
+    let Some(token) = token else {
+        return;
+    };
+    if let Some(tokens) = auth_json.get_mut("tokens").and_then(Value::as_object_mut) {
+        tokens.insert(key.to_string(), Value::String(token));
+    } else if let Some(root) = auth_json.as_object_mut() {
+        root.insert(key.to_string(), Value::String(token));
+    }
+}
+
+async fn refresh_auth_file_tokens(auth_file: &Path, force: bool) -> Result<bool> {
+    let mut auth_json = read_json(auth_file)?;
+    if !should_refresh_auth(&auth_json, force) {
+        return Ok(false);
+    }
+
+    let refresh_token = string_at_path(&auth_json, &["tokens", "refresh_token"])
+        .or_else(|| string_at_path(&auth_json, &["refresh_token"]))
+        .ok_or_else(|| anyhow::anyhow!("auth.json 缺少 refresh_token，无法刷新 OAuth token"))?
+        .to_string();
+
+    let client = reqwest::Client::new();
+    let response = client
+        .post(CODEX_REFRESH_TOKEN_URL)
+        .header("Content-Type", "application/json")
+        .json(&RefreshTokenRequest {
+            client_id: CODEX_OAUTH_CLIENT_ID,
+            grant_type: "refresh_token",
+            refresh_token,
+        })
+        .send()
+        .await
+        .context("请求 Codex OAuth token 刷新失败")?;
+    let status = response.status();
+    let body = response.text().await.unwrap_or_default();
+    if !status.is_success() {
+        return Err(anyhow::anyhow!("Codex OAuth token 刷新失败 {}: {}", status, body));
+    }
+
+    let refreshed: RefreshTokenResponse =
+        serde_json::from_str(&body).with_context(|| format!("解析 Codex OAuth 刷新响应失败: {body}"))?;
+    if refreshed.access_token.is_none() && refreshed.id_token.is_none() && refreshed.refresh_token.is_none() {
+        return Err(anyhow::anyhow!("Codex OAuth 刷新响应没有返回任何 token"));
+    }
+
+    upsert_token_field(&mut auth_json, "id_token", refreshed.id_token);
+    upsert_token_field(&mut auth_json, "access_token", refreshed.access_token);
+    upsert_token_field(&mut auth_json, "refresh_token", refreshed.refresh_token);
+    if let Some(root) = auth_json.as_object_mut() {
+        root.insert("last_refresh".to_string(), Value::String(Utc::now().to_rfc3339()));
+    }
+    write_json(auth_file, &auth_json)?;
+    Ok(true)
 }
 
 fn account_health(auth_file: &Path) -> (AccountHealth, Option<String>, Vec<AuthTokenInfo>) {
@@ -1351,6 +1443,65 @@ fn switch_account_inner(home: &Path, name: &str) -> Result<()> {
     Ok(())
 }
 
+pub async fn refresh_active_auth_tokens(home: &Path, force: bool) -> Result<CodexAuthStatus> {
+    let accounts = list_accounts(home)?;
+    let names: Vec<String> = accounts.iter().map(|a| a.name.clone()).collect();
+    let before = detect_auth(home, &names)?;
+    let ap = auth_path(home);
+    if !ap.exists() {
+        return Err(anyhow::anyhow!("当前 auth.json 不存在"));
+    }
+    let should_refresh = should_refresh_auth_file(&ap, force)?;
+    if !should_refresh {
+        return Ok(before);
+    }
+
+    close_codex_processes();
+    backup_auth(home, 10)?;
+    refresh_auth_file_tokens(&ap, force).await?;
+    if let Some(name) = before.matched_account {
+        let account_auth = accounts_dir(home).join(name).join("auth.json");
+        if account_auth.exists() {
+            std::fs::copy(&ap, account_auth)?;
+        }
+    }
+    reopen_codex_app()?;
+
+    let accounts = list_accounts(home)?;
+    let names: Vec<String> = accounts.iter().map(|a| a.name.clone()).collect();
+    detect_auth(home, &names)
+}
+
+pub async fn refresh_account_auth_tokens(home: &Path, name: &str, force: bool) -> Result<bool> {
+    let account_auth = accounts_dir(home).join(name).join("auth.json");
+    if !account_auth.exists() {
+        return Err(anyhow::anyhow!("账号 '{}' 缺少 auth.json", name));
+    }
+    let should_refresh = should_refresh_auth_file(&account_auth, force)?;
+    if !should_refresh {
+        return Ok(false);
+    }
+
+    let is_active = list_accounts(home)?
+        .into_iter()
+        .any(|account| account.name == name && account.is_active == Some(true));
+    if is_active {
+        close_codex_processes();
+        backup_auth(home, 10)?;
+    }
+
+    let refreshed = refresh_auth_file_tokens(&account_auth, force).await?;
+    if refreshed && is_active {
+        std::fs::copy(&account_auth, auth_path(home))?;
+    }
+
+    if is_active {
+        reopen_codex_app()?;
+    }
+
+    Ok(refreshed)
+}
+
 // ── Priority ──
 
 fn load_priorities(home: &Path) -> Result<std::collections::HashMap<String, bool>> {
@@ -1446,6 +1597,7 @@ pub async fn fetch_usage_for_active_account(home: &Path) -> Result<CodexUsageInf
     let account_name = status
         .matched_account
         .unwrap_or_else(|| "当前账号".to_string());
+    let _ = refresh_active_auth_tokens(home, false).await?;
     fetch_usage_from_auth_file(home, &auth_path(home), &account_name).await
 }
 
@@ -1454,6 +1606,7 @@ pub async fn fetch_usage_for_account(home: &Path, name: &str) -> Result<CodexUsa
     if !acc_auth.exists() {
         return Err(anyhow::anyhow!("账号 '{}' 缺少 auth.json", name));
     }
+    let _ = refresh_account_auth_tokens(home, name, false).await?;
     fetch_usage_from_auth_file(home, &acc_auth, name).await
 }
 

@@ -270,10 +270,12 @@ export const useAppStore = create<AppStore>((set, get) => ({
     if (get().isRefreshingAuth) return
     set({ isRefreshingAuth: true })
     try {
-      const authStatus = await api.detectCodexAuth()
-      set({ authStatus, logs: api.getLogs() })
+      const authStatus = await api.refreshActiveAuthTokens()
+      const accounts = await api.listAccounts()
+      set({ accounts, authStatus, logs: api.getLogs() })
+      get().addToast('success', '已刷新 Codex OAuth token')
     } catch (e: unknown) {
-      get().addToast('error', e instanceof Error ? e.message : '检测失败')
+      get().addToast('error', e instanceof Error ? e.message : '刷新 Token 失败')
     } finally {
       set({ isRefreshingAuth: false })
     }

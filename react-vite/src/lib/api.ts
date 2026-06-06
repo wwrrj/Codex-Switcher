@@ -40,6 +40,12 @@ export async function detectCodexAuth(): Promise<CodexAuthStatus> {
   return await invoke<CodexAuthStatus>('detect_codex_auth')
 }
 
+export async function refreshActiveAuthTokens(): Promise<CodexAuthStatus> {
+  const status = await invoke<CodexAuthStatus>('refresh_active_auth_tokens')
+  addLog('success', '已刷新 Codex OAuth token 并写回 auth.json')
+  return status
+}
+
 export async function addCurrentAccount(name: string, note?: string, overwrite?: boolean): Promise<AccountMeta> {
   const account = await invoke<AccountMeta>('add_account', { name, note: note ?? null, overwrite: overwrite ?? false })
   addLog('success', `已添加账号「${name}」`)

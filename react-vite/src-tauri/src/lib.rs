@@ -34,6 +34,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_app_state,
             detect_codex_auth,
+            refresh_active_auth_tokens,
             list_accounts,
             add_account,
             prepare_new_account_login,
