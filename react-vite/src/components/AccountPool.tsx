@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from 'react'
-import { Plus, Users, Star, RefreshCw, ShieldAlert } from 'lucide-react'
+import { Plus, Users, Star, RefreshCw, ShieldAlert, Clock } from 'lucide-react'
 import { useAppStore } from '@/store/appStore'
-import { cn, shortName } from '@/lib/utils'
+import { cn, formatResetTime, shortName } from '@/lib/utils'
 import SubscriptionBadge from './SubscriptionBadge'
 
 interface Props {
@@ -18,6 +18,7 @@ export default function AccountPool({ onAddAccount }: Props) {
   const loading = useAppStore((s) => s.loading)
 
   const [confirmTarget, setConfirmTarget] = useState<string | null>(null)
+  const [, setClockTick] = useState(0)
   const scrollRef = useRef<HTMLDivElement>(null)
 
   // Sort: priority accounts first, then by name
@@ -40,6 +41,11 @@ export default function AccountPool({ onAddAccount }: Props) {
     el.addEventListener('wheel', handler, { passive: false })
     return () => el.removeEventListener('wheel', handler)
   }, [loading])
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setClockTick((tick) => tick + 1), 60_000)
+    return () => window.clearInterval(timer)
+  }, [])
 
   const handleCardClick = (name: string) => {
     if (name === activeAccount || isRefreshingAll || switchingAccount) return
@@ -98,6 +104,7 @@ export default function AccountPool({ onAddAccount }: Props) {
             const usage5h = acc.usage?.windows.find((w) => w.window === '5h')
             const pct = usage5h?.percentage
             const remainingPct = pct == null ? null : Math.max(0, Math.round(100 - pct))
+            const resetAt = usage5h?.resetAt
             const isConfirming = confirmTarget === acc.name
             const isPriority = !!acc.priority
 
@@ -108,7 +115,7 @@ export default function AccountPool({ onAddAccount }: Props) {
                   onContextMenu={(e) => handleContextMenu(acc.name, e)}
                   disabled={(isRefreshingAll && !isActive) || switchingAccount !== null}
                   className={cn(
-                    'w-[168px] p-3.5 rounded-lg text-left transition-all',
+                    'w-[180px] p-3.5 rounded-lg text-left transition-all',
                     'border bg-bg',
                     isActive
                       ? 'border-primary/30 card-ring'
@@ -175,6 +182,15 @@ export default function AccountPool({ onAddAccount }: Props) {
                           style={{ width: `${remainingPct}%` }}
                         />
                       </div>
+                      {resetAt && (
+                        <div className="flex items-center gap-1.5 pt-0.5 text-[10px] text-fg-subtle">
+                          <Clock className="w-3 h-3 shrink-0" />
+                          <span>5h 重置</span>
+                          <span className="ml-auto tabular-nums text-fg-muted">
+                            {formatResetTime(resetAt)}
+                          </span>
+                        </div>
+                      )}
                     </div>
                   ) : (
                     <span className="text-[11px] text-fg-subtle">未查询</span>
