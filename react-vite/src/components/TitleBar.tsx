@@ -7,7 +7,6 @@ import {
   RefreshCw,
   Save,
   Settings,
-  Sparkles,
   Square,
   X,
 } from 'lucide-react'
@@ -56,7 +55,6 @@ export default function TitleBar({ sidebarCollapsed, onToggleSidebar, onOpenSett
         </button>
 
         <div data-tauri-drag-region className="flex items-center gap-2 min-w-0">
-          <Sparkles className="w-4 h-4 text-primary shrink-0" strokeWidth={1.8} />
           <span data-tauri-drag-region className="text-[13px] font-semibold text-fg shrink-0">
             Codex Switcher
           </span>

@@ -1,4 +1,4 @@
-import { BarChart3, Settings, Users, Sparkles } from 'lucide-react'
+import { BarChart3, Settings, Users } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 export type AppPage = 'accounts' | 'analytics'
@@ -19,18 +19,6 @@ export default function AppSidebar({ collapsed, page, onPageChange, onOpenSettin
         collapsed ? 'w-[58px]' : 'w-[220px]'
       )}
     >
-      <div className={cn('h-16 flex items-center border-b border-line-subtle', collapsed ? 'justify-center' : 'px-4 gap-3')}>
-        <div className="w-8 h-8 rounded-lg border border-primary/25 bg-primary-muted flex items-center justify-center shrink-0">
-          <Sparkles className="w-4 h-4 text-primary" />
-        </div>
-        {!collapsed && (
-          <div className="min-w-0">
-            <p className="text-base font-semibold text-fg font-serif leading-tight">Codex</p>
-            <p className="text-[10px] text-fg-subtle mt-0.5">Account Switcher</p>
-          </div>
-        )}
-      </div>
-
       <nav className="flex-1 p-2 space-y-1">
         <NavButton
           collapsed={collapsed}
