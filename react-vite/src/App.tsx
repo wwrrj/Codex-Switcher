@@ -14,6 +14,8 @@ import SetSubscriptionDialog from '@/components/SetSubscriptionDialog'
 import ToastContainer from '@/components/ToastContainer'
 import TrayMenu from '@/components/TrayMenu'
 
+const SIDEBAR_COLLAPSED_KEY = 'codex-switcher:sidebar-collapsed'
+
 export default function App() {
   const windowLabel = getCurrentWindow().label
 
@@ -35,7 +37,9 @@ function MainApp() {
   const addToast = useAppStore((s) => s.addToast)
 
   const [settingsOpen, setSettingsOpen] = useState(false)
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
+    return window.localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === 'true'
+  })
   const [page, setPage] = useState<AppPage>('accounts')
   const [addOpen, setAddOpen] = useState(false)
   const [renameOpen, setRenameOpen] = useState(false)
@@ -91,6 +95,14 @@ function MainApp() {
     }
   }, [])
 
+  const handleToggleSidebar = useCallback(() => {
+    setSidebarCollapsed((value) => {
+      const next = !value
+      window.localStorage.setItem(SIDEBAR_COLLAPSED_KEY, String(next))
+      return next
+    })
+  }, [])
+
   return (
     <div
       data-component="AppShell"
@@ -99,7 +111,7 @@ function MainApp() {
     >
       <TitleBar
         sidebarCollapsed={sidebarCollapsed}
-        onToggleSidebar={() => setSidebarCollapsed((value) => !value)}
+        onToggleSidebar={handleToggleSidebar}
         onOpenSettings={() => setSettingsOpen(true)}
       />
 
