@@ -3,12 +3,12 @@
 
   <h1>Codex Account Switcher</h1>
 
-  <p><strong>一个本地优先、快速且可视化的 Codex 多账号管理工具。</strong></p>
+  <p><strong>A local-first, fast, and visual multi-account manager for Codex.</strong></p>
 
   <p>
-    <a href="./README.md">简体中文</a>
+    <a href="./README.md">English</a>
     ·
-    <a href="./README_EN.md">English</a>
+    <a href="./README_CN.md">简体中文</a>
   </p>
 
   <p>
@@ -21,46 +21,46 @@
 </div>
 
 > [!IMPORTANT]
-> 本项目是社区工具，与 OpenAI 无隶属或官方关联。账号认证文件包含敏感凭据，请勿分享 `auth.json`、账号备份或完整的 `.codex` 目录。
+> This is a community project and is not affiliated with or endorsed by OpenAI. Authentication files contain sensitive credentials. Never share `auth.json`, account backups, or your complete `.codex` directory.
 
-## 为什么使用它
+## Why Use It
 
-当你需要在个人、工作或团队 Codex 账号之间切换时，手动退出、登录和检查用量会打断工作流。Codex Account Switcher 将这些操作整合到一个桌面应用中：
+Manually signing out, signing in, and checking usage interrupts your workflow when you use personal, work, or team Codex accounts. Codex Account Switcher brings those tasks into one desktop application:
 
-- **快速切换账号**：静默关闭 Codex，备份当前认证文件，切换账号后重新打开 Codex。
-- **自动识别账号**：从认证信息中识别邮箱和订阅类型，也支持手动覆盖订阅类型。
-- **集中查看用量**：查看各账号的 5 小时和 7 天使用窗口，并按设置定期刷新。
-- **本机 Token 分析**：扫描本地 Codex 会话记录，展示今日统计、14 天趋势和每日用量墙。
-- **本地优先**：账号副本、元数据、设置和备份均保存在本机 Codex Home 中。
+- **Switch accounts quickly**: silently close Codex, back up the active credentials, switch accounts, and reopen Codex.
+- **Identify accounts automatically**: detect email addresses and subscription plans, with optional manual plan overrides.
+- **Monitor usage centrally**: view the 5-hour and 7-day usage windows for each account with configurable periodic refresh.
+- **Analyze local tokens**: scan local Codex session records for today's totals, a 14-day trend, and a daily usage heatmap.
+- **Stay local-first**: account copies, metadata, settings, and backups remain inside your local Codex Home.
 
-## 功能概览
+## Features
 
-| 功能 | 状态 | 说明 |
+| Feature | Status | Description |
 | --- | :---: | --- |
-| 多账号保存与切换 | ✅ | 使用邮箱作为账号名，支持重命名、删除和优先标记 |
-| 安全切换流程 | ✅ | 切换前关闭 Codex、备份 `auth.json`，完成后重新启动 |
-| 新账号登录引导 | ✅ | 已保存账号激活时，先退出登录并等待新认证文件生成 |
-| 邮箱与订阅识别 | ✅ | 从本地认证信息识别邮箱与 Free / Plus / Pro / Team 等订阅 |
-| 官方用量查询 | ✅ | 查询账号的 Codex 使用窗口，支持启动、切换后和定时刷新 |
-| Token 本地统计 | ✅ | 从本机会话记录统计输入、缓存输入、输出和推理 Token |
-| 用量分析页面 | ✅ | 每日用量墙、今日 Token、累计 Token 和 14 天动态柱状图 |
-| 自动备份与设置 | ✅ | 支持自定义 Codex Home、备份保留数量和明暗主题 |
-| 智能切换与健康检查 | ✅ | 综合账号健康、优先级和剩余额度推荐切换目标 |
-| 系统托盘与额度通知 | ✅ | 后台驻留、托盘快捷切换，并在额度达到阈值时通知 |
-| 切换历史 | ✅ | 记录账号切换来源、目标、时间和执行结果 |
+| Multi-account management | ✅ | Uses email addresses as account names; supports rename, delete, and priority flags |
+| Safe switching workflow | ✅ | Closes Codex, backs up `auth.json`, switches credentials, and reopens Codex |
+| New-account login guide | ✅ | Signs out an already-saved active account and waits for new credentials |
+| Email and plan detection | ✅ | Detects email and Free / Plus / Pro / Team plans from local authentication data |
+| Official usage queries | ✅ | Queries Codex usage windows on startup, after switching, or periodically |
+| Local token statistics | ✅ | Counts input, cached input, output, and reasoning tokens from local sessions |
+| Usage analytics | ✅ | Daily heatmap, today's tokens, lifetime tokens, and a dynamic 14-day chart |
+| Backups and settings | ✅ | Custom Codex Home, backup retention, refresh interval, and light/dark themes |
+| Smart switching and health checks | ✅ | Recommends accounts using health, priority, and remaining usage |
+| System tray and usage alerts | ✅ | Runs in the tray, provides quick switching, and notifies at usage thresholds |
+| Switch history | ✅ | Records source, destination, time, and result for account switches |
 
-## 快速开始
+## Quick Start
 
-### 环境要求
+### Requirements
 
 - Windows 10 / 11
-- 已安装并登录过 Codex
-- 从源码构建时需要：
+- Codex installed and signed in at least once
+- To build from source:
   - [Node.js](https://nodejs.org/) 18+
   - [Rust](https://www.rust-lang.org/tools/install) 1.77.2+
   - [Tauri 2 prerequisites](https://v2.tauri.app/start/prerequisites/)
 
-### 从源码运行
+### Run from Source
 
 ```powershell
 git clone https://github.com/wwrrj/Codex-Switcher.git
@@ -69,7 +69,7 @@ npm install
 npx tauri dev
 ```
 
-### 构建安装包
+### Build Installers
 
 ```powershell
 cd react-vite
@@ -77,7 +77,7 @@ npm install
 npx tauri build
 ```
 
-构建产物位于：
+Build artifacts are written to:
 
 ```text
 react-vite/src-tauri/target/release/bundle/
@@ -85,105 +85,105 @@ react-vite/src-tauri/target/release/bundle/
 └── nsis/
 ```
 
-## 使用方式
+## Usage
 
-1. 启动应用，程序会自动检测 `~/.codex/auth.json` 和当前登录账号。
-2. 点击添加账号，将当前账号保存至账号池；如果当前账号已保存，程序会引导登录新账号。
-3. 在账号池中选择目标账号并执行切换。程序会关闭 Codex、备份认证文件、完成替换，然后重新打开 Codex。
-4. 进入「用量分析」页面查看每日用量、今日 Token 和最近 14 天趋势。
-5. 在设置中调整用量刷新间隔、备份数量、Codex Home 路径和主题。
+1. Start the application. It automatically detects `~/.codex/auth.json` and the active account.
+2. Add the current account to the account pool. If it is already saved, the application guides you through signing in to a new account.
+3. Select a target account and switch. The application closes Codex, backs up the credentials, replaces them, and reopens Codex.
+4. Open Usage Analytics to inspect daily usage, today's tokens, and the latest 14-day trend.
+5. Configure refresh intervals, backup retention, Codex Home, and theme in Settings.
 
-## 工作原理
+## How It Works
 
-Codex CLI 从 Codex Home 中读取当前认证文件。本工具将每个账号的认证文件副本保存在独立目录，切换时替换当前 `auth.json`。
+Codex reads the active authentication file from Codex Home. This application keeps each saved account in a separate directory and replaces the active `auth.json` during a switch.
 
 ```text
 ~/.codex/
-├── auth.json                    # Codex 当前使用的认证文件
+├── auth.json                    # Active credentials read by Codex
 ├── accounts/
 │   └── user@example.com/
-│       ├── auth.json            # 本工具保存的账号副本
-│       └── meta.json            # 名称、备注、订阅等元数据
+│       ├── auth.json            # Account copy managed by this application
+│       └── meta.json            # Name, note, subscription, and metadata
 ├── config/
 │   ├── settings.json
 │   └── priorities.json
-└── backups/                     # 切换前自动备份
+└── backups/                     # Automatic pre-switch backups
 ```
 
-切换流程：
+Switching flow:
 
 ```mermaid
 flowchart LR
-  A["选择目标账号"] --> B["静默关闭 Codex"]
-  B --> C["备份当前 auth.json"]
-  C --> D["替换为目标账号 auth.json"]
-  D --> E["重新打开 Codex"]
+  A["Select account"] --> B["Silently close Codex"]
+  B --> C["Back up active auth.json"]
+  C --> D["Replace it with target auth.json"]
+  D --> E["Reopen Codex"]
 ```
 
-## 数据与隐私
+## Data and Privacy
 
-- 账号认证文件和备份仅保存在本机，不会上传到本项目维护者的服务器。
-- 用量查询会使用本地认证信息请求 Codex 官方用量接口。
-- Token 统计来自本机 Codex 会话与归档记录。
-- `auth.json` 会被复制保存且**未额外加密**。请保护你的系统账户和 Codex Home 目录。
-- 删除应用前，请根据需要手动清理 `~/.codex/accounts` 和 `~/.codex/backups`。
+- Authentication files and backups remain on your machine and are not uploaded to a server operated by this project.
+- Usage queries use local authentication data to call the official Codex usage endpoint.
+- Token statistics come from local Codex session and archived rollout records.
+- Saved `auth.json` copies are **not additionally encrypted**. Protect your operating-system account and Codex Home directory.
+- If needed, manually remove `~/.codex/accounts` and `~/.codex/backups` when uninstalling.
 
-## 技术栈
+## Tech Stack
 
-- **桌面端**：[Tauri 2](https://v2.tauri.app/) + Rust
-- **前端**：[React 18](https://react.dev/) + TypeScript + Vite
-- **样式**：[Tailwind CSS](https://tailwindcss.com/)
-- **状态管理**：[Zustand](https://zustand.docs.pmnd.rs/)
+- **Desktop**: [Tauri 2](https://v2.tauri.app/) + Rust
+- **Frontend**: [React 18](https://react.dev/) + TypeScript + Vite
+- **Styling**: [Tailwind CSS](https://tailwindcss.com/)
+- **State**: [Zustand](https://zustand.docs.pmnd.rs/)
 
-## 项目结构
+## Project Structure
 
 ```text
 Codex-Switcher/
 ├── react-vite/
-│   ├── src/                     # React 前端
+│   ├── src/                     # React frontend
 │   │   ├── components/
 │   │   ├── lib/
 │   │   └── store/
-│   └── src-tauri/               # Rust / Tauri 后端
+│   └── src-tauri/               # Rust / Tauri backend
 │       ├── src/
 │       └── tauri.conf.json
 └── README.md
 ```
 
-## 开发与验证
+## Development and Verification
 
 ```powershell
-# 前端生产构建
+# Frontend production build
 cd react-vite
 npm run build
 
-# Rust 构建与测试
+# Rust build and tests
 cd src-tauri
 cargo build
 cargo test
 
-# 完整桌面安装包
+# Complete desktop installers
 cd ..
 npx tauri build
 ```
 
-## 路线图
+## Roadmap
 
-- [ ] 发布可直接下载的版本与变更日志
-- [ ] 补充自动化测试和 CI
-- [ ] 完善跨平台进程管理与打包验证
-- [ ] 增加数据导出与更丰富的统计维度
-- [ ] 为敏感账号副本提供可选加密
+- [ ] Publish downloadable releases and changelogs
+- [ ] Add automated tests and CI
+- [ ] Complete cross-platform process management and packaging verification
+- [ ] Add data export and richer analytics
+- [ ] Provide optional encryption for sensitive account copies
 
-## 参与贡献
+## Contributing
 
-欢迎提交 Issue 和 Pull Request。提交改动前请确保：
+Issues and pull requests are welcome. Before submitting a change:
 
-1. 不提交任何真实的 `auth.json`、Token、邮箱或本地 Codex 数据。
-2. 前端构建、Rust 构建和测试全部通过。
-3. 提交信息遵循 [Conventional Commits](https://www.conventionalcommits.org/)。
+1. Never commit a real `auth.json`, token, email address, or local Codex data.
+2. Ensure the frontend build, Rust build, and tests pass.
+3. Follow [Conventional Commits](https://www.conventionalcommits.org/) for commit messages.
 
-## 致谢
+## Acknowledgements
 
 - [OpenAI Codex](https://github.com/openai/codex)
 - [Tauri](https://tauri.app/)
@@ -192,5 +192,5 @@ npx tauri build
 ---
 
 <div align="center">
-  如果这个项目对你有帮助，可以为仓库点一个 Star。
+  If this project helps you, consider giving the repository a Star.
 </div>
