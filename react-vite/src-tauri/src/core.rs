@@ -180,7 +180,7 @@ fn account_health(auth_file: &Path) -> (AccountHealth, Option<String>, Vec<AuthT
         Some("expired") => Some("Access Token 已过期，且未找到 Refresh Token".to_string()),
         Some("expiring_soon") => Some("Access Token 将在 24 小时内过期".to_string()),
         _ if id.map(|token| token.status.as_str()) == Some("expired") && has_refresh_token => {
-            Some("ID Token 已过期；Access Token/Refresh Token 状态见下方明细".to_string())
+            Some("ID Token 是身份/订阅声明，过期不代表 Codex 不可用；当前请求以 Access Token 和 Refresh Token 为准".to_string())
         }
         _ => Some("Token 结构有效，过期时间见下方明细".to_string()),
     };

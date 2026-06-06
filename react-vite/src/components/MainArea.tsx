@@ -209,9 +209,12 @@ export default function MainArea({ onRename, onDelete, onAddAccount }: Props) {
                     key={token.kind}
                     icon={<Key className="w-3 h-3" />}
                     label={tokenLabel(token.kind)}
-                    value={tokenExpiryText(token)}
+                    value={tokenExpiryText(token.kind, token)}
                   />
                 ))}
+                <p className="text-[10px] text-fg-subtle leading-relaxed">
+                  Codex 请求使用 Access Token；ID Token 主要用于身份和订阅声明，过期后仍可由 Refresh Token 续期。
+                </p>
               </div>
 
               {/* Account metadata */}
@@ -439,13 +442,13 @@ function tokenLabel(kind: string): string {
   return kind
 }
 
-function tokenExpiryText(token: { present: boolean; expiresAt?: string; status: string }): string {
+function tokenExpiryText(kind: string, token: { present: boolean; expiresAt?: string; status: string }): string {
   if (!token.present) return '未保存'
   if (!token.expiresAt) return '无 exp'
   const suffix = token.status === 'expired'
-    ? '已过期'
+    ? kind === 'id_token' ? '声明过期' : '已过期'
     : token.status === 'expiring_soon'
-      ? '即将过期'
+      ? kind === 'id_token' ? '声明将过期' : '即将过期'
       : '有效'
   return `${formatDate(token.expiresAt)} · ${suffix}`
 }
