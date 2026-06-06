@@ -94,6 +94,15 @@ body {
   -moz-osx-font-smoothing: grayscale;
 }
 
+.window-drag {
+  -webkit-app-region: drag;
+}
+
+.window-no-drag,
+.window-no-drag * {
+  -webkit-app-region: no-drag;
+}
+
 html.tray-window,
 html.tray-window body,
 html.tray-window #root {
