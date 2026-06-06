@@ -1,8 +1,14 @@
 import { Info, PauseCircle, Sparkles } from 'lucide-react'
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { useAppStore } from '@/store/appStore'
 import { cn } from '@/lib/utils'
 import type { SchedulerConfig, SchedulerHeatmapBucket } from '@/lib/types'
+
+type PopoverPosition = { left: number; top: number }
+
+const INFO_POPOVER_WIDTH = 360
+const INFO_POPOVER_GAP = 10
 
 function addHours(time: string | undefined, hours: number): string {
   if (!time) return '—'
@@ -27,6 +33,8 @@ export default function SmartQuotaSchedulerPanel() {
   const saveSchedulerConfig = useAppStore((state) => state.saveSchedulerConfig)
   const refreshScheduler = useAppStore((state) => state.refreshScheduler)
   const [showInfo, setShowInfo] = useState(false)
+  const [infoPosition, setInfoPosition] = useState<PopoverPosition>({ left: 0, top: 0 })
+  const hideInfoTimer = useRef<number | null>(null)
 
   const config = scheduler.config
   const analysis = scheduler.analysis
@@ -40,6 +48,27 @@ export default function SmartQuotaSchedulerPanel() {
 
   const updateConfig = (patch: Partial<SchedulerConfig>) => {
     void saveSchedulerConfig({ ...config, ...patch })
+  }
+
+  const clearHideInfoTimer = () => {
+    if (hideInfoTimer.current !== null) window.clearTimeout(hideInfoTimer.current)
+    hideInfoTimer.current = null
+  }
+
+  const openInfo = (target: HTMLElement) => {
+    clearHideInfoTimer()
+    const rect = target.getBoundingClientRect()
+    const maxLeft = window.innerWidth - INFO_POPOVER_WIDTH - 12
+    setInfoPosition({
+      left: Math.max(12, Math.min(rect.left, maxLeft)),
+      top: Math.max(12, Math.min(rect.bottom + INFO_POPOVER_GAP, window.innerHeight - 320)),
+    })
+    setShowInfo(true)
+  }
+
+  const scheduleCloseInfo = () => {
+    clearHideInfoTimer()
+    hideInfoTimer.current = window.setTimeout(() => setShowInfo(false), 120)
   }
 
   const maturity = analysis.maturity
@@ -59,12 +88,18 @@ export default function SmartQuotaSchedulerPanel() {
           <div className="flex items-center gap-1.5">
             <h3 className="text-xs font-semibold text-fg">智能配额调度</h3>
             <span
-              className="relative"
-              onMouseEnter={() => setShowInfo(true)}
-              onMouseLeave={() => setShowInfo(false)}
+              className="inline-flex"
+              onMouseEnter={(event) => openInfo(event.currentTarget)}
+              onMouseLeave={scheduleCloseInfo}
             >
               <Info className="w-3.5 h-3.5 text-fg-subtle cursor-help" />
-              {showInfo && <SchedulerInfoPopover />}
+              {showInfo && (
+                <SchedulerInfoPopover
+                  position={infoPosition}
+                  onMouseEnter={clearHideInfoTimer}
+                  onMouseLeave={scheduleCloseInfo}
+                />
+              )}
             </span>
           </div>
           <p className="text-[11px] text-fg-subtle mt-1 leading-relaxed">
@@ -186,36 +221,66 @@ export default function SmartQuotaSchedulerPanel() {
   )
 }
 
-function SchedulerInfoPopover() {
+function formatCompactNumber(value: number): string {
+  if (value >= 100_000_000) return `${(value / 100_000_000).toFixed(1)}亿`
+  if (value >= 10_000) return `${(value / 10_000).toFixed(1)}万`
+  return value.toLocaleString()
+}
+
+function SchedulerInfoPopover({
+  position,
+  onMouseEnter,
+  onMouseLeave,
+}: {
+  position: PopoverPosition
+  onMouseEnter: () => void
+  onMouseLeave: () => void
+}) {
   const analysis = useAppStore((state) => state.scheduler.analysis)
   const recommendation = analysis.recommendation
-  return (
-    <div className="absolute left-0 top-5 z-[80] w-[520px] rounded-xl border border-line bg-bg-surface card-ring shadow-2xl p-4">
+  const maturity = analysis.maturity
+  const accountName = analysis.accountName ?? '当前账号'
+
+  return createPortal(
+    <div
+      className="fixed z-[1000] w-[360px] rounded-xl border border-line bg-bg-surface card-ring shadow-2xl p-4"
+      style={{ left: position.left, top: position.top }}
+      onMouseEnter={onMouseEnter}
+      onMouseLeave={onMouseLeave}
+    >
       <div className="flex items-start gap-2 mb-3">
         <Sparkles className="w-4 h-4 text-primary mt-0.5" />
         <div>
           <p className="text-sm font-semibold text-fg font-serif">智能配额调度如何工作</p>
           <p className="text-[11px] text-fg-subtle mt-1 leading-relaxed">
-            该功能用于优化 Codex 5 小时配额窗口的起点。它不会增加你的额度，而是根据你的本地使用习惯，选择一个更适合的首次触发时间。
+            根据本地 Codex 使用记录，选择更适合的 5 小时额度窗口起点。它不会增加额度，只优化首次触发时间。
           </p>
         </div>
       </div>
-      <SchedulerMiniHeatmap buckets={analysis.heatmap} />
-      <div className="grid grid-cols-4 gap-2 my-3">
-        <Metric label="活跃日" value={`${analysis.maturity.activeUsageDays}`} />
-        <Metric label="会话" value={`${analysis.maturity.totalSessions}`} />
-        <Metric label="置信度" value={`${analysis.maturity.confidenceScore}%`} />
-        <Metric label="还需活跃日" value={`${analysis.maturity.remainingActiveDaysToOptimal}`} />
+
+      <div className="grid grid-cols-2 gap-2 mb-3">
+        <Metric label="账号" value={accountName} />
+        <Metric label="数据等级" value={maturity.level} />
+        <Metric label="活跃日" value={`${maturity.activeUsageDays}`} />
+        <Metric label="置信度" value={`${maturity.confidenceScore}%`} />
+        <Metric label="会话" value={`${maturity.totalSessions}`} />
+        <Metric label="请求" value={`${maturity.totalRequests}`} />
+        <Metric label="Token" value={formatCompactNumber(maturity.totalTokens)} />
+        <Metric label="还需活跃日" value={`${maturity.remainingActiveDaysToOptimal}`} />
       </div>
+
       <div className="space-y-2 text-[11px] text-fg-subtle leading-relaxed">
-        <p>系统会在本地分析 Codex 使用日志，识别你通常在哪些时间段高强度写代码，然后模拟不同首次使用时间，计算 5 小时、10 小时、15 小时后的刷新点。</p>
-        <p>开启后，应用会在该时间自动发送一次极小请求，用于启动当天的 5 小时窗口。每个账号每天最多触发一次，错过 30 分钟会跳过。</p>
-        {analysis.maturity.activeUsageDays < 7 && (
-          <p className="text-warning">当前数据还不足以得到稳定结论，系统会使用目前已知数据进行临时估计。你也可以手动设定触发时间。</p>
+        <p>系统只读取本地日志，按活跃时段模拟 5h、10h、15h 后的刷新点，再给出推荐触发时间。</p>
+        <p>开启后每天最多触发一次极小请求；错过窗口、账号异常、连续失败或无收益时会跳过或暂停。</p>
+        {recommendation && (
+          <p className="text-fg-muted">{recommendation.reason}</p>
         )}
-        {recommendation && <p className="text-fg-muted">{recommendation.reason}</p>}
+        {maturity.activeUsageDays < 7 && (
+          <p className="text-warning">当前数据仍偏少，推荐会随本地使用记录增加而调整。</p>
+        )}
       </div>
-    </div>
+    </div>,
+    document.body,
   )
 }
 
@@ -294,9 +359,9 @@ export function SchedulerMiniHeatmap({ buckets }: { buckets: SchedulerHeatmapBuc
 
 function Metric({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-lg bg-bg-elevated/60 border border-line-subtle px-2 py-1.5">
+    <div className="min-w-0 rounded-lg bg-bg-elevated/60 border border-line-subtle px-2 py-1.5">
       <p className="text-[9px] text-fg-subtle">{label}</p>
-      <p className="text-xs font-semibold text-fg tabular-nums mt-0.5">{value}</p>
+      <p className="truncate text-xs font-semibold text-fg tabular-nums mt-0.5" title={value}>{value}</p>
     </div>
   )
 }
