@@ -715,6 +715,12 @@ async fn forward_once(
             }
             .into());
         }
+        if transform_chat_stream {
+            let value: serde_json::Value =
+                serde_json::from_slice(&body).context("解析 Chat Completions 响应失败")?;
+            let converted = transforms::chat_completion_response_to_responses(value);
+            return Ok(json_response(status_code, converted));
+        }
         return response_from_parts(status_code, headers, Body::from(body));
     }
 
@@ -829,6 +835,14 @@ async fn response_from_reqwest(
         return Ok(builder.body(Body::from_stream(stream))?);
     }
     let bytes = upstream.bytes().await?;
+    if transform_chat_stream {
+        let value: serde_json::Value =
+            serde_json::from_slice(&bytes).context("解析 Chat Completions 响应失败")?;
+        let converted = transforms::chat_completion_response_to_responses(value);
+        return Ok(builder
+            .header("content-type", "application/json")
+            .body(Body::from(converted.to_string()))?);
+    }
     Ok(builder.body(Body::from(bytes))?)
 }
 
@@ -1176,7 +1190,9 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status(), reqwest::StatusCode::OK);
-        assert!(response.text().await.unwrap().contains("ok"));
+        let body: serde_json::Value = response.json().await.unwrap();
+        assert_eq!(body["object"], "response");
+        assert_eq!(body["output"][0]["content"][0]["text"], "ok");
         stop_proxy(&home).unwrap();
         let _ = std::fs::remove_dir_all(home);
     }

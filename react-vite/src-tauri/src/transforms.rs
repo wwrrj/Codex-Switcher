@@ -183,6 +183,82 @@ pub fn chat_completion_chunk_to_responses_sse(line: &str) -> Option<String> {
     None
 }
 
+pub fn chat_completion_response_to_responses(value: Value) -> Value {
+    let id = value
+        .get("id")
+        .and_then(Value::as_str)
+        .unwrap_or("resp_proxy");
+    let model = value
+        .get("model")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+    let created_at = value
+        .get("created")
+        .and_then(Value::as_i64)
+        .unwrap_or_default();
+    let mut output = Vec::new();
+
+    if let Some(choice) = value
+        .get("choices")
+        .and_then(Value::as_array)
+        .and_then(|v| v.first())
+    {
+        if let Some(message) = choice.get("message") {
+            if let Some(tool_calls) = message.get("tool_calls").and_then(Value::as_array) {
+                for tool in tool_calls {
+                    let call_id = tool
+                        .get("id")
+                        .and_then(Value::as_str)
+                        .unwrap_or("tool_call");
+                    let function = tool.get("function").cloned().unwrap_or(Value::Null);
+                    output.push(json!({
+                        "type": "function_call",
+                        "id": call_id,
+                        "call_id": call_id,
+                        "name": function.get("name").and_then(Value::as_str).unwrap_or("tool"),
+                        "arguments": function.get("arguments").and_then(Value::as_str).unwrap_or("")
+                    }));
+                }
+            }
+            let content = message
+                .get("content")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            if !content.is_empty() {
+                output.push(json!({
+                    "type": "message",
+                    "id": format!("msg_{id}"),
+                    "role": "assistant",
+                    "content": [{
+                        "type": "output_text",
+                        "text": content,
+                        "annotations": []
+                    }]
+                }));
+            }
+        }
+    }
+
+    let mut response = json!({
+        "id": id,
+        "object": "response",
+        "created_at": created_at,
+        "status": "completed",
+        "model": model,
+        "output": output
+    });
+
+    if let Some(usage) = value.get("usage") {
+        response["usage"] = json!({
+            "input_tokens": usage.get("prompt_tokens").and_then(Value::as_u64).unwrap_or_default(),
+            "output_tokens": usage.get("completion_tokens").and_then(Value::as_u64).unwrap_or_default(),
+            "total_tokens": usage.get("total_tokens").and_then(Value::as_u64).unwrap_or_default()
+        });
+    }
+
+    response
+}
+
 pub fn synthetic_models_response(provider_name: &str, models: &[String]) -> Value {
     let data = models
         .iter()
@@ -265,6 +341,36 @@ mod tests {
         assert!(event.contains("response.output_item.added"));
         assert!(event.contains("function_call"));
         assert!(event.contains("run"));
+    }
+
+    #[test]
+    fn converts_chat_completion_response_to_responses_json() {
+        let out = chat_completion_response_to_responses(json!({
+            "id": "chatcmpl_1",
+            "created": 1710000000,
+            "model": "deepseek-chat",
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "content": "hello",
+                    "tool_calls": [{
+                        "id": "call_1",
+                        "function": { "name": "run", "arguments": "{}" }
+                    }]
+                },
+                "finish_reason": "tool_calls"
+            }],
+            "usage": {
+                "prompt_tokens": 2,
+                "completion_tokens": 3,
+                "total_tokens": 5
+            }
+        }));
+        assert_eq!(out["object"], "response");
+        assert_eq!(out["model"], "deepseek-chat");
+        assert_eq!(out["output"][0]["type"], "function_call");
+        assert_eq!(out["output"][1]["content"][0]["text"], "hello");
+        assert_eq!(out["usage"]["total_tokens"], 5);
     }
 
     #[test]
