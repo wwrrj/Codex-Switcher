@@ -1726,6 +1726,7 @@ fn backup_auth(home: &Path, retention: u32) -> Result<PathBuf> {
 
 // ── Codex process lifecycle ──
 
+#[cfg(not(test))]
 fn close_codex_processes() {
     #[cfg(target_os = "windows")]
     {
@@ -1761,7 +1762,10 @@ fn close_codex_processes() {
     }
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(test)]
+fn close_codex_processes() {}
+
+#[cfg(all(target_os = "windows", not(test)))]
 fn where_codex_candidates() -> Vec<PathBuf> {
     let mut candidates = Vec::new();
     if let Ok(output) = Command::new("where.exe")
@@ -1783,7 +1787,7 @@ fn where_codex_candidates() -> Vec<PathBuf> {
     candidates
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(all(target_os = "windows", not(test)))]
 fn windows_codex_candidates() -> Vec<PathBuf> {
     let mut candidates = Vec::new();
 
@@ -1822,7 +1826,7 @@ fn windows_codex_candidates() -> Vec<PathBuf> {
         .collect()
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(all(target_os = "windows", not(test)))]
 fn spawn_codex_executable(path: &Path) -> Result<()> {
     Command::new(path)
         .arg("app")
@@ -1835,6 +1839,7 @@ fn spawn_codex_executable(path: &Path) -> Result<()> {
     Ok(())
 }
 
+#[cfg(not(test))]
 fn reopen_codex_app() -> Result<()> {
     #[cfg(target_os = "windows")]
     {
@@ -1879,6 +1884,11 @@ fn reopen_codex_app() -> Result<()> {
             .context("启动 Codex 失败")?;
         Ok(())
     }
+}
+
+#[cfg(test)]
+fn reopen_codex_app() -> Result<()> {
+    Ok(())
 }
 
 fn run_codex_logout() {
@@ -2948,6 +2958,53 @@ mod tests {
 
         let priorities = load_priorities(&home).unwrap();
         assert_eq!(priorities.get("work@example.com"), Some(&true));
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    #[test]
+    fn switch_account_replaces_auth_when_proxy_is_disabled() {
+        let home = temp_home("switch-proxy-disabled");
+        let old_auth = r#"{
+            "auth_mode": "chatgpt",
+            "tokens": {
+                "access_token": "old-access",
+                "refresh_token": "old-refresh"
+            }
+        }"#;
+        let new_auth = r#"{
+            "auth_mode": "chatgpt",
+            "tokens": {
+                "access_token": "new-access",
+                "refresh_token": "new-refresh"
+            }
+        }"#;
+
+        std::fs::write(auth_path(&home), old_auth).unwrap();
+        let old_dir = accounts_dir(&home).join("main@example.com");
+        let new_dir = accounts_dir(&home).join("work@example.com");
+        std::fs::create_dir_all(&old_dir).unwrap();
+        std::fs::create_dir_all(&new_dir).unwrap();
+        std::fs::write(old_dir.join("auth.json"), old_auth).unwrap();
+        std::fs::write(new_dir.join("auth.json"), new_auth).unwrap();
+
+        switch_account(&home, "work@example.com").unwrap();
+
+        let active_auth = std::fs::read_to_string(auth_path(&home)).unwrap();
+        assert_eq!(active_auth, new_auth);
+
+        let backups: Vec<_> = std::fs::read_dir(backup_dir(&home))
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .collect();
+        assert_eq!(backups.len(), 1);
+
+        let history = get_switch_history(&home).unwrap();
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].from_account.as_deref(), Some("main@example.com"));
+        assert_eq!(history[0].to_account, "work@example.com");
+        assert!(history[0].success);
+        assert!(history[0].error.is_none());
+
         let _ = std::fs::remove_dir_all(home);
     }
 }

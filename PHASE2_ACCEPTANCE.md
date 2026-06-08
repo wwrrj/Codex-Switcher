@@ -10,9 +10,9 @@ Status legend:
 
 ## Current Completion
 
-Estimated completion: `95%-97%`.
+Estimated completion: `96%-98%`.
 
-The core proxy phase is implemented and covered by automated tests, packaging, release startup, and a controlled proxy smoke test. The only remaining work before declaring the phase fully complete is a manual UI regression pass for account switching with proxy disabled, because that path depends on the installed desktop environment and real Codex process behavior.
+The core proxy phase is implemented and covered by automated tests, packaging, release startup, a controlled proxy smoke test, and a non-destructive core regression for proxy-disabled account switching. The only remaining work before declaring the phase fully complete is a manual UI regression pass for account switching with proxy disabled, because that path depends on the installed desktop environment and real Codex process behavior.
 
 ## Core Proxy
 
@@ -106,19 +106,20 @@ The core proxy phase is implemented and covered by automated tests, packaging, r
 | Provider management UI | Done | `SettingsDrawer` provider form and list |
 | Dashboard proxy state card | Done | `MainArea` proxy / failover / residency cards |
 | Tray proxy state summary | Done | `TrayMenu` |
-| Existing account switching still available when proxy is disabled | Needs E2E | Core account switch logic remains, but latest proxy changes still need a manual UI regression pass with the real desktop app |
+| Existing account switching still available when proxy is disabled | Needs E2E | Core regression `switch_account_replaces_auth_when_proxy_is_disabled` confirms auth replacement, backup creation, and switch history in a temporary Codex home; latest proxy changes still need a manual UI regression pass with the real desktop app |
 
 ## Required Verification Gates
 
 | Gate | Status | Last Known Result |
 | --- | --- | --- |
-| `cargo test` | Done | 74 tests passed on 2026-06-08 after phase 2 proxy smoke test |
+| `cargo test` | Done | 75 tests passed on 2026-06-08 after adding proxy-disabled account switch regression |
 | `cargo build` | Done | Passed on 2026-06-08 after commit `6e8954e` |
 | `npm run build` | Done | Passed on 2026-06-08 after commit `6e8954e` |
 | `git diff --check` | Done | Passed on 2026-06-08 after commit `6e8954e` |
 | `npm exec tauri -- build` | Done | Passed on 2026-06-08; produced MSI and NSIS bundles |
 | Real app startup verification | Done | Release executable started as process `codex-switcher` and was stopped successfully |
 | Controlled proxy request through command path | Done | `phase2_proxy_smoke_installs_routes_restores_and_redacts_logs` starts proxy, installs config, sends `/v1/responses`, restores config, and checks logs |
+| Proxy-disabled core account-switch regression | Done | `switch_account_replaces_auth_when_proxy_is_disabled` verifies auth replacement, backup creation, and switch history without touching the real Codex home |
 | Real UI account-switch regression | Needs E2E | Not yet re-run manually with real Codex process behavior |
 
 ## Remaining Before Claiming Phase 2 Complete
