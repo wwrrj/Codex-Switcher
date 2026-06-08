@@ -734,6 +734,9 @@ fn is_chat_completion_provider(provider: &ProviderConfig) -> bool {
 fn upstream_url(provider: &ProviderConfig, path: &str, query: Option<&str>) -> String {
     match provider.kind {
         ProviderKind::ChatGptOauth => {
+            if path.starts_with("/api/") || path == "/api" {
+                return join_url(&url_origin(&provider.base_url), path, query);
+            }
             let stripped = path.strip_prefix("/backend-api").unwrap_or(path);
             join_url(&provider.base_url, stripped, query)
         }
@@ -742,6 +745,15 @@ fn upstream_url(provider: &ProviderConfig, path: &str, query: Option<&str>) -> S
             join_url(&provider.base_url, stripped, query)
         }
     }
+}
+
+fn url_origin(url: &str) -> String {
+    let trimmed = url.trim_end_matches('/');
+    let Some((scheme, rest)) = trimmed.split_once("://") else {
+        return trimmed.to_string();
+    };
+    let host = rest.split('/').next().unwrap_or(rest);
+    format!("{scheme}://{host}")
 }
 
 fn join_url(base: &str, path: &str, query: Option<&str>) -> String {
@@ -860,6 +872,38 @@ mod tests {
         assert_eq!(
             upstream_url(&provider, "/backend-api/wham/usage", None),
             "https://chatgpt.com/backend-api/wham/usage"
+        );
+    }
+
+    #[test]
+    fn builds_chatgpt_api_url_from_origin() {
+        let provider = ProviderConfig {
+            id: "p".to_string(),
+            name: "p".to_string(),
+            kind: ProviderKind::ChatGptOauth,
+            enabled: true,
+            base_url: "https://chatgpt.com/backend-api".to_string(),
+            account_name: Some("a".to_string()),
+            api_key: None,
+            model_map: None,
+            include_in_failover: true,
+            health: ProviderHealth::default(),
+        };
+        assert_eq!(
+            upstream_url(&provider, "/api/auth/session", Some("x=1")),
+            "https://chatgpt.com/api/auth/session?x=1"
+        );
+    }
+
+    #[test]
+    fn extracts_url_origin_without_path() {
+        assert_eq!(
+            url_origin("https://chatgpt.com/backend-api/"),
+            "https://chatgpt.com"
+        );
+        assert_eq!(
+            url_origin("http://127.0.0.1:14550/v1"),
+            "http://127.0.0.1:14550"
         );
     }
 
