@@ -5,7 +5,7 @@ use tauri::{
 
 const TRAY_ID: &str = "codex-switcher-tray";
 const TRAY_MENU_WIDTH: i32 = 360;
-const TRAY_MENU_HEIGHT: i32 = 260;
+const TRAY_MENU_HEIGHT: i32 = 310;
 
 pub fn refresh_menu(_app: &AppHandle) -> tauri::Result<()> {
     Ok(())

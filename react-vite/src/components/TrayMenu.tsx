@@ -12,12 +12,24 @@ export default function TrayMenu() {
   const switchingAccount = useAppStore((state) => state.switchingAccount)
   const switchToAccount = useAppStore((state) => state.switchToAccount)
   const proxyState = useAppStore((state) => state.proxyState)
+  const refreshProxyState = useAppStore((state) => state.refreshProxyState)
 
   useLayoutEffect(() => {
     document.documentElement.classList.add('tray-window')
     void init()
     return () => document.documentElement.classList.remove('tray-window')
   }, [init])
+
+  useLayoutEffect(() => {
+    const refresh = () => void refreshProxyState(true)
+    refresh()
+    const timer = window.setInterval(refresh, 5_000)
+    window.addEventListener('focus', refresh)
+    return () => {
+      window.clearInterval(timer)
+      window.removeEventListener('focus', refresh)
+    }
+  }, [refreshProxyState])
 
   const openMain = async () => {
     await api.showMainWindow()
@@ -78,6 +90,28 @@ export default function TrayMenu() {
             <p className="text-fg truncate mt-0.5" title={proxyState.mobileResidency.accountName ?? '未启用'}>
               {proxyState.mobileResidency.enabled ? shortName(proxyState.mobileResidency.accountName ?? '未选择', 16) : '未启用'}
             </p>
+          </div>
+        </div>
+
+        <div className="px-3 py-2 border-b border-line-subtle text-[10px]">
+          <div className="rounded-md bg-bg-elevated/60 border border-line-subtle px-2 py-1.5 min-w-0">
+            <div className="flex items-center gap-1.5">
+              <span className={cn('w-1.5 h-1.5 rounded-full shrink-0', proxyState.status === 'running' ? 'bg-success' : 'bg-fg-subtle/40')} />
+              <span className="text-fg-subtle">代理</span>
+              <span className="text-fg truncate min-w-0">
+                {proxyState.status === 'running' ? '运行中' : proxyState.config.enabled ? '待恢复' : '未启用'}
+              </span>
+              {proxyState.recentRequests[0] && (
+                <span className="ml-auto text-fg-subtle shrink-0">
+                  {proxyState.recentRequests[0].durationMs}ms
+                </span>
+              )}
+            </div>
+            {proxyState.recentRequests[0] && (
+              <p className="text-fg-subtle mt-0.5 truncate" title={`${proxyState.recentRequests[0].method} ${proxyState.recentRequests[0].path}`}>
+                {proxyState.recentRequests[0].method} · {proxyState.recentRequests[0].path}
+              </p>
+            )}
           </div>
         </div>
 
