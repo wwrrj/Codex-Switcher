@@ -464,6 +464,7 @@ async fn proxy_websocket(
     client_socket: WebSocket,
     req: Request<Body>,
 ) -> Result<()> {
+    let started = Instant::now();
     let config = load_proxy_config(&state.home)?;
     let accounts = core::list_accounts(&state.home).unwrap_or_default();
     let providers = providers::merged_providers(&state.home, &accounts)?;
@@ -485,6 +486,18 @@ async fn proxy_websocket(
         request.headers_mut().insert("authorization", auth.parse()?);
     }
     let (upstream_socket, _) = connect_async(request).await?;
+    record_request(
+        &state.home,
+        Some(provider.name.clone()),
+        &Method::GET,
+        &path,
+        Some(101),
+        true,
+        1,
+        started.elapsed().as_millis(),
+        true,
+        None,
+    );
     let (mut upstream_write, mut upstream_read) = upstream_socket.split();
     let (mut client_write, mut client_read) = client_socket.split();
 
@@ -503,10 +516,25 @@ async fn proxy_websocket(
         Result::<()>::Ok(())
     };
 
-    tokio::select! {
+    let result = tokio::select! {
         result = client_to_upstream => result,
         result = upstream_to_client => result,
+    };
+    if let Err(error) = &result {
+        record_request(
+            &state.home,
+            Some(provider.name.clone()),
+            &Method::GET,
+            &path,
+            None,
+            false,
+            1,
+            started.elapsed().as_millis(),
+            true,
+            Some(sanitize_message(&error.to_string())),
+        );
     }
+    result
 }
 
 fn axum_to_tungstenite(message: AxumWsMessage) -> TungsteniteMessage {
@@ -1716,6 +1744,13 @@ mod tests {
         let response = socket.next().await.unwrap().unwrap();
         assert_eq!(response.into_text().unwrap(), "ping");
         socket.close(None).await.unwrap();
+        let requests = load_requests(&home);
+        assert!(!requests.is_empty());
+        assert_eq!(requests[0].provider.as_deref(), Some("WS"));
+        assert_eq!(requests[0].method, "GET");
+        assert_eq!(requests[0].path, "/v1/realtime");
+        assert_eq!(requests[0].status_code, Some(101));
+        assert!(requests[0].success);
         stop_proxy(&home).unwrap();
         let _ = std::fs::remove_dir_all(home);
     }
