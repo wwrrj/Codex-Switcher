@@ -82,27 +82,52 @@ pub fn choose_provider(
     policy: &RoutingPolicy,
     previous_provider_ids: &[String],
 ) -> Option<RouteDecision> {
-    let mut ordered = Vec::new();
     if let Some(id) = &policy.request_provider_id {
         if let Some(provider) = providers.iter().find(|item| &item.id == id) {
-            ordered.push(provider.clone());
-        }
-    }
-    for provider in providers {
-        if !ordered
-            .iter()
-            .any(|item: &ProviderConfig| item.id == provider.id)
-        {
-            ordered.push(provider.clone());
+            if !previous_provider_ids.contains(&provider.id)
+                && is_provider_available(provider, policy.allow_third_party_failover)
+            {
+                return Some(RouteDecision {
+                    provider: provider.clone(),
+                });
+            }
         }
     }
 
-    ordered
-        .into_iter()
+    let mut candidates = providers
+        .iter()
         .filter(|provider| !previous_provider_ids.contains(&provider.id))
         .filter(|provider| is_provider_available(provider, policy.allow_third_party_failover))
+        .cloned()
+        .collect::<Vec<_>>();
+    candidates.sort_by(|a, b| {
+        provider_rank(a)
+            .cmp(&provider_rank(b))
+            .then_with(|| last_used_sort_key(&a.health).cmp(&last_used_sort_key(&b.health)))
+            .then_with(|| a.id.cmp(&b.id))
+    });
+    candidates
+        .into_iter()
         .next()
         .map(|provider| RouteDecision { provider })
+}
+
+fn provider_rank(provider: &ProviderConfig) -> u8 {
+    match provider.health.status {
+        ProviderHealthStatus::Healthy => 0,
+        ProviderHealthStatus::Unknown => 1,
+        ProviderHealthStatus::CoolingDown => 2,
+        ProviderHealthStatus::Disabled | ProviderHealthStatus::Invalid => 9,
+    }
+}
+
+fn last_used_sort_key(health: &ProviderHealth) -> i64 {
+    health
+        .last_used_at
+        .as_deref()
+        .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
+        .map(|dt| dt.timestamp())
+        .unwrap_or(0)
 }
 
 pub fn failure_reason(kind: &FailureKind) -> &'static str {
@@ -162,5 +187,38 @@ mod tests {
         };
         let decision = choose_provider(&providers, &policy, &[]).unwrap();
         assert_eq!(decision.provider.id, "oauth");
+    }
+
+    #[test]
+    fn prefers_healthy_provider_over_unknown() {
+        let mut unknown = provider("unknown", ProviderKind::OpenAiCompatible);
+        unknown.health.status = ProviderHealthStatus::Unknown;
+        let healthy = provider("healthy", ProviderKind::OpenAiCompatible);
+        let decision =
+            choose_provider(&[unknown, healthy], &RoutingPolicy::default(), &[]).unwrap();
+        assert_eq!(decision.provider.id, "healthy");
+    }
+
+    #[test]
+    fn prefers_least_recently_used_when_health_matches() {
+        let mut old = provider("old", ProviderKind::OpenAiCompatible);
+        old.health.last_used_at = Some("2026-01-01T00:00:00Z".to_string());
+        let mut recent = provider("recent", ProviderKind::OpenAiCompatible);
+        recent.health.last_used_at = Some("2026-06-01T00:00:00Z".to_string());
+        let decision = choose_provider(&[recent, old], &RoutingPolicy::default(), &[]).unwrap();
+        assert_eq!(decision.provider.id, "old");
+    }
+
+    #[test]
+    fn explicit_request_provider_still_wins() {
+        let mut unknown = provider("unknown", ProviderKind::OpenAiCompatible);
+        unknown.health.status = ProviderHealthStatus::Unknown;
+        let healthy = provider("healthy", ProviderKind::OpenAiCompatible);
+        let policy = RoutingPolicy {
+            request_provider_id: Some("unknown".to_string()),
+            ..RoutingPolicy::default()
+        };
+        let decision = choose_provider(&[healthy, unknown], &policy, &[]).unwrap();
+        assert_eq!(decision.provider.id, "unknown");
     }
 }

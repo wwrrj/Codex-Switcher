@@ -109,7 +109,7 @@ mod tests {
     fn temp_home() -> PathBuf {
         let path = std::env::temp_dir().join(format!(
             "codex-switcher-config-test-{}",
-            chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+            uuid::Uuid::new_v4()
         ));
         std::fs::create_dir_all(&path).unwrap();
         path
