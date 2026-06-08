@@ -132,6 +132,18 @@ fn validate_request_provider(home: &Path, provider_id: &str) -> Result<()> {
     Ok(())
 }
 
+fn clear_unavailable_request_provider(home: &Path) -> Result<()> {
+    let mut config = load_proxy_config(home)?;
+    let Some(provider_id) = config.routing.request_provider_id.clone() else {
+        return Ok(());
+    };
+    if validate_request_provider(home, &provider_id).is_err() {
+        config.routing.request_provider_id = None;
+        save_proxy_config(home, &config)?;
+    }
+    Ok(())
+}
+
 pub fn save_proxy_config(home: &Path, config: &ProxyConfig) -> Result<()> {
     validate_proxy_config(config)?;
     write_json(&proxy_config_file(home), config)
@@ -284,6 +296,11 @@ pub async fn start_proxy(home: PathBuf) -> Result<ProxyState> {
 
 pub async fn update_proxy_config(home: PathBuf, mut config: ProxyConfig) -> Result<ProxyState> {
     validate_proxy_config(&config)?;
+    if let Some(provider_id) = config.routing.request_provider_id.as_deref() {
+        if validate_request_provider(&home, provider_id).is_err() {
+            config.routing.request_provider_id = None;
+        }
+    }
     let runtime_url = RUNTIME
         .lock()
         .unwrap()
@@ -351,6 +368,7 @@ pub fn set_request_provider(home: &Path, provider_id: Option<String>) -> Result<
 
 pub fn save_provider(home: &Path, provider: ProviderConfig) -> Result<ProxyState> {
     providers::save_provider(home, provider)?;
+    clear_unavailable_request_provider(home)?;
     get_proxy_state(home)
 }
 
@@ -371,13 +389,7 @@ pub fn update_provider_options(
     include_in_failover: Option<bool>,
 ) -> Result<ProxyState> {
     providers::update_provider_options(home, provider_id, enabled, include_in_failover)?;
-    if enabled == Some(false) {
-        let mut config = load_proxy_config(home)?;
-        if config.routing.request_provider_id.as_deref() == Some(provider_id) {
-            config.routing.request_provider_id = None;
-            save_proxy_config(home, &config)?;
-        }
-    }
+    clear_unavailable_request_provider(home)?;
     get_proxy_state(home)
 }
 
@@ -443,6 +455,7 @@ pub async fn check_provider_health(home: PathBuf, provider_id: String) -> Result
         },
     };
     providers::set_provider_health(&home, &provider.id, health)?;
+    clear_unavailable_request_provider(&home)?;
     get_proxy_state(&home)
 }
 
@@ -1388,6 +1401,43 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn check_provider_health_clears_current_route_when_provider_becomes_invalid() {
+        let _guard = TEST_PROXY_MUTEX.lock().await;
+        let home = temp_home("health-invalid-route");
+        let upstream = start_mock_models_upstream(StatusCode::UNAUTHORIZED).await;
+        providers::save_provider(
+            &home,
+            ProviderConfig {
+                id: "provider:invalid-route".to_string(),
+                name: "Invalid Route".to_string(),
+                kind: ProviderKind::OpenAiCompatible,
+                enabled: true,
+                base_url: format!("{}/v1", upstream),
+                account_name: None,
+                api_key: Some("sk-test".to_string()),
+                model_map: None,
+                include_in_failover: true,
+                health: ProviderHealth::default(),
+            },
+        )
+        .unwrap();
+        set_request_provider(&home, Some("provider:invalid-route".to_string())).unwrap();
+
+        let state = check_provider_health(home.clone(), "provider:invalid-route".to_string())
+            .await
+            .unwrap();
+
+        assert!(state.config.routing.request_provider_id.is_none());
+        let provider = state
+            .providers
+            .iter()
+            .find(|provider| provider.id == "provider:invalid-route")
+            .unwrap();
+        assert_eq!(provider.health.status, ProviderHealthStatus::Invalid);
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    #[tokio::test]
     async fn check_all_provider_health_updates_configured_providers() {
         let _guard = TEST_PROXY_MUTEX.lock().await;
         let home = temp_home("health-all");
@@ -1894,6 +1944,52 @@ mod tests {
         set_request_provider(&home, Some("provider:disable".to_string())).unwrap();
 
         update_provider_options(&home, "provider:disable", Some(false), None).unwrap();
+
+        assert!(load_proxy_config(&home)
+            .unwrap()
+            .routing
+            .request_provider_id
+            .is_none());
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    #[test]
+    fn saving_disabled_current_provider_clears_route() {
+        let home = temp_home("save-disabled-provider");
+        save_provider(
+            &home,
+            ProviderConfig {
+                id: "provider:save-disabled".to_string(),
+                name: "Save Disabled".to_string(),
+                kind: ProviderKind::OpenAiCompatible,
+                enabled: true,
+                base_url: "https://relay.example/v1".to_string(),
+                account_name: None,
+                api_key: Some("sk-test".to_string()),
+                model_map: None,
+                include_in_failover: true,
+                health: ProviderHealth::default(),
+            },
+        )
+        .unwrap();
+        set_request_provider(&home, Some("provider:save-disabled".to_string())).unwrap();
+
+        save_provider(
+            &home,
+            ProviderConfig {
+                id: "provider:save-disabled".to_string(),
+                name: "Save Disabled".to_string(),
+                kind: ProviderKind::OpenAiCompatible,
+                enabled: false,
+                base_url: "https://relay.example/v1".to_string(),
+                account_name: None,
+                api_key: None,
+                model_map: None,
+                include_in_failover: true,
+                health: ProviderHealth::default(),
+            },
+        )
+        .unwrap();
 
         assert!(load_proxy_config(&home)
             .unwrap()
