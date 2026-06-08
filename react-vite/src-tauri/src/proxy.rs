@@ -588,12 +588,7 @@ pub async fn send_proxy_test_request(home: PathBuf) -> Result<ProxyTestResult> {
         .or_else(|| state.mobile_residency.request_provider.clone());
     let failovers_before = load_failovers(&home).len();
     let started = Instant::now();
-    let test_path = state
-        .request_provider
-        .as_ref()
-        .filter(|provider| provider.kind == ProviderKind::ChatGptOauth)
-        .map(|_| "/backend-api/api/codex")
-        .unwrap_or("/v1/responses");
+    let test_path = "/v1/responses";
     let response = reqwest::Client::new()
         .post(format!("{}{}", listen_url.trim_end_matches('/'), test_path))
         .json(&serde_json::json!({
@@ -1072,7 +1067,6 @@ fn is_inference_request_parts(method: &str, path: &str) -> bool {
         || normalized.ends_with("/responses")
         || normalized.ends_with("/v1/chat/completions")
         || normalized.ends_with("/chat/completions")
-        || normalized == "/backend-api/api/codex"
 }
 
 fn is_account_scoped_backend_request(method: &Method, path: &str) -> bool {
@@ -1255,9 +1249,7 @@ async fn forward_once(
     let mut upstream_body = body;
     let mut url = upstream_url;
     let mut transform_chat_stream = false;
-    if is_chat_completion_provider(provider)
-        && (path.ends_with("/responses") || path.trim_end_matches('/') == "/backend-api/api/codex")
-    {
+    if is_chat_completion_provider(provider) && path.ends_with("/responses") {
         let json: serde_json::Value =
             serde_json::from_slice(&upstream_body).context("解析 Responses 请求失败")?;
         let requested_model = json
@@ -1381,6 +1373,14 @@ fn is_chat_completion_provider(provider: &ProviderConfig) -> bool {
 fn upstream_url(provider: &ProviderConfig, path: &str, query: Option<&str>) -> String {
     match provider.kind {
         ProviderKind::ChatGptOauth => {
+            let normalized = path.trim_end_matches('/');
+            if normalized.ends_with("/v1/responses")
+                || normalized.ends_with("/responses")
+                || normalized.contains("/responses/")
+            {
+                let stripped = path.strip_prefix("/v1").unwrap_or(path);
+                return join_url("https://chatgpt.com/backend-api/codex", stripped, query);
+            }
             if path.starts_with("/api/") || path == "/api" {
                 return join_url(&url_origin(&provider.base_url), path, query);
             }
@@ -1582,6 +1582,30 @@ mod tests {
         assert_eq!(
             upstream_url(&provider, "/api/auth/session", Some("x=1")),
             "https://chatgpt.com/api/auth/session?x=1"
+        );
+    }
+
+    #[test]
+    fn builds_chatgpt_codex_responses_url() {
+        let provider = ProviderConfig {
+            id: "p".to_string(),
+            name: "p".to_string(),
+            kind: ProviderKind::ChatGptOauth,
+            enabled: true,
+            base_url: "https://chatgpt.com/backend-api".to_string(),
+            account_name: Some("a".to_string()),
+            api_key: None,
+            model_map: None,
+            include_in_failover: true,
+            health: ProviderHealth::default(),
+        };
+        assert_eq!(
+            upstream_url(&provider, "/v1/responses", None),
+            "https://chatgpt.com/backend-api/codex/responses"
+        );
+        assert_eq!(
+            upstream_url(&provider, "/v1/responses/compact", Some("x=1")),
+            "https://chatgpt.com/backend-api/codex/responses/compact?x=1"
         );
     }
 
@@ -2584,10 +2608,6 @@ mod tests {
             "/backend-api/accounts/check"
         ));
         assert!(is_replay_safe_request(&Method::POST, "/v1/responses"));
-        assert!(is_replay_safe_request(
-            &Method::POST,
-            "/backend-api/api/codex"
-        ));
         assert!(is_replay_safe_request(
             &Method::POST,
             "/v1/chat/completions"
