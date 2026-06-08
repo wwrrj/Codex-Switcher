@@ -94,7 +94,22 @@ pub fn load_proxy_config(home: &Path) -> Result<ProxyConfig> {
     Ok(read_json(&path)?)
 }
 
+fn validate_proxy_config(config: &ProxyConfig) -> Result<()> {
+    let host = config.host.trim();
+    if host.is_empty() {
+        anyhow::bail!("代理监听地址不能为空");
+    }
+    if host != config.host {
+        anyhow::bail!("代理监听地址不能包含前后空格");
+    }
+    format!("{}:{}", config.host, config.port)
+        .parse::<SocketAddr>()
+        .with_context(|| format!("代理监听地址无效: {}:{}", config.host, config.port))?;
+    Ok(())
+}
+
 pub fn save_proxy_config(home: &Path, config: &ProxyConfig) -> Result<()> {
+    validate_proxy_config(config)?;
     write_json(&proxy_config_file(home), config)
 }
 
@@ -1113,6 +1128,65 @@ mod tests {
         ));
         std::fs::create_dir_all(&path).unwrap();
         path
+    }
+
+    #[test]
+    fn save_proxy_config_accepts_valid_listen_address() {
+        let home = temp_home("valid-config");
+        save_proxy_config(
+            &home,
+            &ProxyConfig {
+                host: "127.0.0.1".to_string(),
+                port: 14551,
+                ..ProxyConfig::default()
+            },
+        )
+        .unwrap();
+
+        let config = load_proxy_config(&home).unwrap();
+        assert_eq!(config.host, "127.0.0.1");
+        assert_eq!(config.port, 14551);
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    #[test]
+    fn save_proxy_config_rejects_invalid_listen_address_without_overwriting() {
+        let home = temp_home("invalid-config");
+        save_proxy_config(
+            &home,
+            &ProxyConfig {
+                host: "127.0.0.1".to_string(),
+                port: 14552,
+                ..ProxyConfig::default()
+            },
+        )
+        .unwrap();
+
+        let error = save_proxy_config(
+            &home,
+            &ProxyConfig {
+                host: "localhost".to_string(),
+                port: 14553,
+                ..ProxyConfig::default()
+            },
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("代理监听地址无效"));
+
+        let config = load_proxy_config(&home).unwrap();
+        assert_eq!(config.host, "127.0.0.1");
+        assert_eq!(config.port, 14552);
+
+        let error = save_proxy_config(
+            &home,
+            &ProxyConfig {
+                host: " 127.0.0.1".to_string(),
+                ..ProxyConfig::default()
+            },
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("不能包含前后空格"));
+        let _ = std::fs::remove_dir_all(home);
     }
 
     async fn start_mock_upstream(status: StatusCode) -> String {
