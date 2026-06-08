@@ -58,6 +58,15 @@ function serializeModelMap(map?: Record<string, string>): string {
     .join('\n')
 }
 
+const codexModelAliases = ['gpt-5.1-codex', 'gpt-5', 'gpt-4.1', 'gpt-4.1-mini']
+
+function modelMapFromModels(models: string[]): string {
+  const preferred = models.find((model) => /codex|gpt|chat|glm|deepseek|kimi|mimo/i.test(model)) ?? models[0]
+  const lines = [`# 读取到 ${models.length} 个模型：${models.slice(0, 12).join(', ')}${models.length > 12 ? ' ...' : ''}`]
+  lines.push(...codexModelAliases.map((alias) => `${alias}=${preferred}`))
+  return lines.join('\n')
+}
+
 interface Props {
   open: boolean
   onClose: () => void
@@ -77,6 +86,7 @@ export default function SettingsDrawer({ open, onClose }: Props) {
   const updateProviderOptions = useAppStore((s) => s.updateProviderOptions)
   const checkProviderHealth = useAppStore((s) => s.checkProviderHealth)
   const checkAllProviderHealth = useAppStore((s) => s.checkAllProviderHealth)
+  const fetchProviderModels = useAppStore((s) => s.fetchProviderModels)
   const setMobileResidencyAccount = useAppStore((s) => s.setMobileResidencyAccount)
   const enableMobileResidency = useAppStore((s) => s.enableMobileResidency)
   const disableMobileResidency = useAppStore((s) => s.disableMobileResidency)
@@ -88,8 +98,10 @@ export default function SettingsDrawer({ open, onClose }: Props) {
   const [providerBaseUrl, setProviderBaseUrl] = useState('')
   const [providerApiKey, setProviderApiKey] = useState('')
   const [providerModelMap, setProviderModelMap] = useState('')
+  const [fetchedModelsInfo, setFetchedModelsInfo] = useState('')
   const [editingProviderId, setEditingProviderId] = useState<string | null>(null)
   const [checkingProviderId, setCheckingProviderId] = useState<string | null>(null)
+  const [fetchingModels, setFetchingModels] = useState(false)
   const [proxyHostDraft, setProxyHostDraft] = useState(proxyState.config.host)
   const [proxyPortDraft, setProxyPortDraft] = useState(String(proxyState.config.port))
 
@@ -150,6 +162,27 @@ export default function SettingsDrawer({ open, onClose }: Props) {
     resetProviderForm()
   }
 
+  const handleFetchProviderModels = async () => {
+    const fallbackBaseUrl: Record<ProviderKind, string> = {
+      chat_gpt_oauth: 'https://chatgpt.com/backend-api',
+      open_ai_api_key: 'https://api.openai.com/v1',
+      open_ai_compatible: 'https://example.com/v1',
+      glm: 'https://open.bigmodel.cn/api/paas/v4',
+      mimo: 'https://api.mimo.example/v1',
+      deep_seek: 'https://api.deepseek.com/v1',
+      custom_chat_completions: 'https://example.com/v1',
+    }
+    const baseUrl = providerBaseUrl.trim() || fallbackBaseUrl[providerKind]
+    setFetchingModels(true)
+    try {
+      const result = await fetchProviderModels(baseUrl, providerApiKey, editingProviderId ?? undefined)
+      setProviderModelMap(modelMapFromModels(result.models))
+      setFetchedModelsInfo(`已从 ${result.sourceUrl} 读取 ${result.models.length} 个模型`)
+    } finally {
+      setFetchingModels(false)
+    }
+  }
+
   const handleSaveProxyListenAddress = async () => {
     const host = proxyHostDraft.trim() || '127.0.0.1'
     const port = Math.max(1, Math.min(65535, parseInt(proxyPortDraft, 10) || 14550))
@@ -169,6 +202,7 @@ export default function SettingsDrawer({ open, onClose }: Props) {
     setProviderBaseUrl('')
     setProviderApiKey('')
     setProviderModelMap('')
+    setFetchedModelsInfo('')
   }
 
   const handleEditProvider = (provider: PublicProviderConfig) => {
@@ -178,6 +212,7 @@ export default function SettingsDrawer({ open, onClose }: Props) {
     setProviderBaseUrl(provider.baseUrl)
     setProviderApiKey('')
     setProviderModelMap(serializeModelMap(provider.modelMap))
+    setFetchedModelsInfo('')
   }
 
   const handleCheckProvider = async (providerId: string) => {
@@ -492,6 +527,19 @@ export default function SettingsDrawer({ open, onClose }: Props) {
                 rows={3}
                 className="w-full px-2.5 py-1.5 rounded-md text-xs bg-bg-elevated border border-line text-fg placeholder:text-fg-subtle focus:border-primary focus:outline-none resize-none"
               />
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-[10px] text-fg-subtle">
+                  {fetchedModelsInfo || '可从 OpenAI-compatible /v1/models 自动读取模型并生成映射草稿。'}
+                </p>
+                <button
+                  onClick={() => void handleFetchProviderModels()}
+                  disabled={fetchingModels}
+                  className="px-3 py-1.5 rounded-md text-xs font-medium text-primary bg-primary-muted hover:bg-primary/15 disabled:opacity-60 shrink-0"
+                >
+                  <RefreshCw className={cn('inline w-3 h-3 mr-1', fetchingModels && 'animate-spin')} />
+                  {fetchingModels ? '读取中' : '读取模型'}
+                </button>
+              </div>
               <div className="flex flex-wrap gap-2">
                 <button
                   onClick={() => void handleSaveProvider()}

@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { AccountMeta, CodexAuthStatus, AppLog, AppSettings, RefreshProgress, ToastItem, SubscriptionPlan, CodexUsageInfo, DailyUsageEntry, TokenUsageSummary, SwitchHistoryEntry, SchedulerConfig, SchedulerState, ProxyState, ProviderConfig, ProxyConfig } from '@/lib/types'
+import type { AccountMeta, CodexAuthStatus, AppLog, AppSettings, RefreshProgress, ToastItem, SubscriptionPlan, CodexUsageInfo, DailyUsageEntry, TokenUsageSummary, SwitchHistoryEntry, SchedulerConfig, SchedulerState, ProxyState, ProviderConfig, ProxyConfig, ProviderModelList } from '@/lib/types'
 import * as api from '@/lib/api'
 import * as usageDb from '@/lib/usageDb'
 
@@ -208,6 +208,7 @@ interface AppStore {
   restoreProxyConfig: () => Promise<void>
   setRequestProvider: (providerId?: string) => Promise<void>
   saveProvider: (provider: ProviderConfig) => Promise<void>
+  fetchProviderModels: (baseUrl: string, apiKey?: string, providerId?: string) => Promise<ProviderModelList>
   removeProvider: (providerId: string) => Promise<void>
   updateProviderOptions: (providerId: string, options: { enabled?: boolean; includeInFailover?: boolean }) => Promise<void>
   clearProxyEvents: () => Promise<void>
@@ -713,6 +714,18 @@ export const useAppStore = create<AppStore>((set, get) => ({
       get().addToast('success', `已保存请求出口「${provider.name}」`)
     } catch (e: unknown) {
       get().addToast('error', e instanceof Error ? e.message : '保存请求出口失败')
+    }
+  },
+
+  fetchProviderModels: async (baseUrl, apiKey, providerId) => {
+    try {
+      const result = await api.fetchProviderModels(baseUrl, apiKey, providerId)
+      set({ logs: api.getLogs() })
+      get().addToast('success', `已读取 ${result.models.length} 个模型`)
+      return result
+    } catch (e: unknown) {
+      get().addToast('error', e instanceof Error ? e.message : '读取模型列表失败')
+      throw e
     }
   },
 

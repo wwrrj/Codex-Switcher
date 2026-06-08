@@ -87,6 +87,7 @@ pub fn run() {
             stop_proxy,
             set_request_provider,
             save_provider,
+            fetch_provider_models,
             remove_provider,
             update_provider_options,
             clear_proxy_events,

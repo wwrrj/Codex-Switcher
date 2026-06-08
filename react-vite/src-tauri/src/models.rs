@@ -302,6 +302,13 @@ pub struct PublicProviderConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ProviderModelList {
+    pub models: Vec<String>,
+    pub source_url: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RoutingPolicy {
     pub request_provider_id: Option<String>,
     pub automatic_failover: bool,

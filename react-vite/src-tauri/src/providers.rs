@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use chrono::Utc;
+use reqwest::header::AUTHORIZATION;
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -246,6 +247,83 @@ pub fn set_provider_health(home: &Path, provider_id: &str, health: ProviderHealt
     save_provider_configs(home, &providers)
 }
 
+fn provider_models_url(base_url: &str) -> String {
+    let mut trimmed = base_url.trim().trim_end_matches('/').to_string();
+    for suffix in ["/chat/completions", "/responses"] {
+        if let Some(prefix) = trimmed.strip_suffix(suffix) {
+            trimmed = prefix.trim_end_matches('/').to_string();
+            break;
+        }
+    }
+    if trimmed.ends_with("/models") {
+        trimmed
+    } else if trimmed.ends_with("/v1") || trimmed.ends_with("/v4") {
+        format!("{trimmed}/models")
+    } else {
+        format!("{trimmed}/v1/models")
+    }
+}
+
+pub async fn fetch_provider_models(
+    base_url: &str,
+    api_key: Option<&str>,
+) -> Result<ProviderModelList> {
+    let source_url = provider_models_url(base_url);
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .build()?;
+    let mut request = client.get(&source_url);
+    if let Some(api_key) = api_key.map(str::trim).filter(|key| !key.is_empty()) {
+        request = request.header(AUTHORIZATION, format!("Bearer {api_key}"));
+    }
+    let response = request
+        .send()
+        .await
+        .with_context(|| format!("读取模型列表失败: {source_url}"))?;
+    let status = response.status();
+    let body = response.text().await.unwrap_or_default();
+    if !status.is_success() {
+        return Err(anyhow::anyhow!("模型列表接口返回 {}", status));
+    }
+
+    let value: Value = serde_json::from_str(&body).context("解析模型列表失败")?;
+    let models = value
+        .get("data")
+        .and_then(|data| data.as_array())
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| item.get("id").and_then(|id| id.as_str()))
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        })
+        .filter(|models| !models.is_empty())
+        .or_else(|| {
+            value
+                .get("models")
+                .and_then(|data| data.as_array())
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter_map(|item| {
+                            item.as_str()
+                                .or_else(|| item.get("id").and_then(|id| id.as_str()))
+                        })
+                        .map(str::to_string)
+                        .collect::<Vec<_>>()
+                })
+        })
+        .unwrap_or_default();
+    if models.is_empty() {
+        return Err(anyhow::anyhow!("模型列表响应中没有可用模型 id"));
+    }
+
+    let mut models = models;
+    models.sort();
+    models.dedup();
+    Ok(ProviderModelList { models, source_url })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -279,6 +357,30 @@ mod tests {
             serde_json::to_string_pretty(&value).unwrap(),
         )
         .unwrap();
+    }
+
+    #[test]
+    fn provider_models_url_handles_common_base_urls() {
+        assert_eq!(
+            provider_models_url("https://api.example.com/v1"),
+            "https://api.example.com/v1/models"
+        );
+        assert_eq!(
+            provider_models_url("https://open.bigmodel.cn/api/paas/v4/"),
+            "https://open.bigmodel.cn/api/paas/v4/models"
+        );
+        assert_eq!(
+            provider_models_url("https://relay.example.com"),
+            "https://relay.example.com/v1/models"
+        );
+        assert_eq!(
+            provider_models_url("https://relay.example.com/v1/models"),
+            "https://relay.example.com/v1/models"
+        );
+        assert_eq!(
+            provider_models_url("https://relay.example.com/v1/chat/completions"),
+            "https://relay.example.com/v1/models"
+        );
     }
 
     #[test]

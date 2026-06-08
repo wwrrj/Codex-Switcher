@@ -361,6 +361,38 @@ pub async fn save_provider(provider: ProviderConfig) -> Result<ProxyState, Strin
 }
 
 #[tauri::command]
+pub async fn fetch_provider_models(
+    base_url: String,
+    api_key: Option<String>,
+    provider_id: Option<String>,
+) -> Result<ProviderModelList, String> {
+    let saved_api_key = if api_key
+        .as_deref()
+        .map(str::trim)
+        .filter(|key| !key.is_empty())
+        .is_some()
+    {
+        api_key
+    } else if let Some(provider_id) = provider_id {
+        blocking(move || {
+            let actual_home = actual_home()?;
+            let providers =
+                crate::providers::load_provider_configs(&actual_home).map_err(|e| e.to_string())?;
+            Ok(providers
+                .into_iter()
+                .find(|provider| provider.id == provider_id)
+                .and_then(|provider| provider.api_key))
+        })
+        .await?
+    } else {
+        None
+    };
+    crate::providers::fetch_provider_models(&base_url, saved_api_key.as_deref())
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 pub async fn remove_provider(provider_id: String) -> Result<ProxyState, String> {
     blocking(move || {
         let actual_home = actual_home()?;

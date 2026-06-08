@@ -1,6 +1,6 @@
 import { invoke } from '@tauri-apps/api/core'
 import { isPermissionGranted, requestPermission, sendNotification } from '@tauri-apps/plugin-notification'
-import type { AccountMeta, CodexAuthStatus, CodexUsageInfo, AppSettings, AppLog, AppState, SubscriptionInfo, SubscriptionPlan, TokenUsageSummary, NewAccountLoginPreparation, SwitchHistoryEntry, SwitchRecommendation, SchedulerConfig, SchedulerHistoryEntry, SchedulerState, ImportAccountsResult, ProxyState, ProviderConfig, ProxyConfig } from './types'
+import type { AccountMeta, CodexAuthStatus, CodexUsageInfo, AppSettings, AppLog, AppState, SubscriptionInfo, SubscriptionPlan, TokenUsageSummary, NewAccountLoginPreparation, SwitchHistoryEntry, SwitchRecommendation, SchedulerConfig, SchedulerHistoryEntry, SchedulerState, ImportAccountsResult, ProxyState, ProviderConfig, ProxyConfig, ProviderModelList } from './types'
 
 // ── Frontend-only log management ──
 
@@ -125,6 +125,20 @@ export async function saveProvider(provider: ProviderConfig): Promise<ProxyState
   const state = await invoke<ProxyState>('save_provider', { provider })
   addLog('success', `已保存请求出口「${provider.name}」`)
   return state
+}
+
+export async function fetchProviderModels(
+  baseUrl: string,
+  apiKey?: string,
+  providerId?: string,
+): Promise<ProviderModelList> {
+  const result = await invoke<ProviderModelList>('fetch_provider_models', {
+    baseUrl,
+    apiKey: apiKey?.trim() || null,
+    providerId: providerId || null,
+  })
+  addLog('success', `已读取 ${result.models.length} 个模型`)
+  return result
 }
 
 export async function removeProvider(providerId: string): Promise<ProxyState> {

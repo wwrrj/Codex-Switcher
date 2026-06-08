@@ -176,6 +176,11 @@ export interface PublicProviderConfig {
   health: ProviderHealth;
 }
 
+export interface ProviderModelList {
+  models: string[];
+  sourceUrl: string;
+}
+
 export interface RoutingPolicy {
   requestProviderId?: string;
   automaticFailover: boolean;
