@@ -48,6 +48,7 @@ struct ProxyAppState {
 struct UpstreamFailure {
     reason: String,
     status_code: Option<u16>,
+    retryable: bool,
 }
 
 impl fmt::Display for UpstreamFailure {
@@ -805,6 +806,7 @@ async fn proxy_request(state: ProxyAppState, req: Request<Body>) -> Result<Respo
                     .downcast_ref::<UpstreamFailure>()
                     .map(|failure| (sanitize_message(&failure.reason), failure.status_code))
                     .unwrap_or_else(|| (sanitize_message(&error.to_string()), None));
+                let retryable_failure = is_retryable_proxy_error(&error);
                 providers::mark_provider_failure(
                     &state.home,
                     &provider.id,
@@ -812,7 +814,7 @@ async fn proxy_request(state: ProxyAppState, req: Request<Body>) -> Result<Respo
                     config.routing.cooldown_seconds,
                 )
                 .ok();
-                let next_provider = if attempt_idx + 1 < max_attempts {
+                let next_provider = if retryable_failure && attempt_idx + 1 < max_attempts {
                     let accounts = core::list_accounts(&state.home).unwrap_or_default();
                     let provider_list = providers::merged_providers(&state.home, &accounts)?;
                     routing::choose_provider(&provider_list, &config.routing, &attempted)
@@ -833,9 +835,10 @@ async fn proxy_request(state: ProxyAppState, req: Request<Body>) -> Result<Respo
                     );
                 }
                 last_error = Some(error);
-                if attempt_idx + 1 < max_attempts {
+                if retryable_failure && attempt_idx + 1 < max_attempts {
                     continue;
                 }
+                break;
             }
         }
     }
@@ -875,6 +878,13 @@ fn is_replay_safe_request(method: &Method, path: &str) -> bool {
         || normalized.ends_with("/responses")
         || normalized.ends_with("/v1/chat/completions")
         || normalized.ends_with("/chat/completions")
+}
+
+fn is_retryable_proxy_error(error: &anyhow::Error) -> bool {
+    if let Some(failure) = error.downcast_ref::<UpstreamFailure>() {
+        return failure.retryable;
+    }
+    error.downcast_ref::<reqwest::Error>().is_some()
 }
 
 fn default_synthetic_models() -> Vec<String> {
@@ -992,11 +1002,17 @@ async fn forward_once(
     if !status.is_success() {
         let status_u16 = status.as_u16();
         let body = upstream.text().await.unwrap_or_default();
-        let kind = routing::classify_failure(Some(status_u16), &body)
-            .unwrap_or(routing::FailureKind::Unknown);
+        let kind = routing::classify_failure(Some(status_u16), &body);
         return Err(UpstreamFailure {
-            reason: format!("{}: HTTP {}", routing::failure_reason(&kind), status_u16),
+            reason: format!(
+                "{}: HTTP {}",
+                kind.as_ref()
+                    .map(routing::failure_reason)
+                    .unwrap_or_else(|| routing::failure_reason(&routing::FailureKind::Unknown)),
+                status_u16
+            ),
             status_code: Some(status_u16),
+            retryable: kind.is_some(),
         }
         .into());
     }
@@ -1009,6 +1025,7 @@ async fn forward_once(
             return Err(UpstreamFailure {
                 reason: routing::failure_reason(&kind).to_string(),
                 status_code: Some(status.as_u16()),
+                retryable: true,
             }
             .into());
         }
@@ -1347,6 +1364,25 @@ mod tests {
         let app = Router::new()
             .route("/v1/chat/completions", post(handler))
             .with_state(status);
+        tauri::async_runtime::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        format!("http://{}", addr)
+    }
+
+    async fn start_mock_text_upstream(status: StatusCode, body: &'static str) -> String {
+        async fn handler(
+            State((status, body)): State<(StatusCode, &'static str)>,
+            Json(_body): Json<serde_json::Value>,
+        ) -> impl IntoResponse {
+            (status, body).into_response()
+        }
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let app = Router::new()
+            .route("/v1/chat/completions", post(handler))
+            .with_state((status, body));
         tauri::async_runtime::spawn(async move {
             axum::serve(listener, app).await.unwrap();
         });
@@ -1903,6 +1939,67 @@ mod tests {
             .unwrap();
         assert_eq!(response.status(), reqwest::StatusCode::BAD_GATEWAY);
         assert!(load_failovers(&home).is_empty());
+        stop_proxy(&home).unwrap();
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    #[tokio::test]
+    async fn proxy_does_not_failover_on_unclassified_upstream_error() {
+        let _guard = TEST_PROXY_MUTEX.lock().await;
+        let home = temp_home("unclassified-upstream-error");
+        let bad = start_mock_text_upstream(StatusCode::BAD_REQUEST, "invalid request shape").await;
+        let good = start_mock_upstream(StatusCode::OK).await;
+        let port = available_port().await;
+        save_proxy_config(
+            &home,
+            &ProxyConfig {
+                enabled: true,
+                port,
+                routing: RoutingPolicy {
+                    request_provider_id: Some("provider:bad".to_string()),
+                    automatic_failover: true,
+                    max_retries: 2,
+                    allow_third_party_failover: true,
+                    ..RoutingPolicy::default()
+                },
+                ..ProxyConfig::default()
+            },
+        )
+        .unwrap();
+        for (id, base_url) in [("provider:bad", bad), ("provider:good", good)] {
+            providers::save_provider(
+                &home,
+                ProviderConfig {
+                    id: id.to_string(),
+                    name: id.to_string(),
+                    kind: ProviderKind::CustomChatCompletions,
+                    enabled: true,
+                    base_url: format!("{}/v1", base_url),
+                    account_name: None,
+                    api_key: Some("sk-test".to_string()),
+                    model_map: None,
+                    include_in_failover: true,
+                    health: ProviderHealth {
+                        status: ProviderHealthStatus::Healthy,
+                        ..ProviderHealth::default()
+                    },
+                },
+            )
+            .unwrap();
+        }
+
+        let state = start_proxy(home.clone()).await.unwrap();
+        let response = reqwest::Client::new()
+            .post(format!("{}/v1/responses", state.listen_url.unwrap()))
+            .json(&serde_json::json!({ "model": "gpt-4.1", "input": "hello", "stream": false }))
+            .send()
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), reqwest::StatusCode::BAD_GATEWAY);
+        assert!(load_failovers(&home).is_empty());
+        let requests = load_requests(&home);
+        assert_eq!(requests[0].attempts, 1);
         stop_proxy(&home).unwrap();
         let _ = std::fs::remove_dir_all(home);
     }
