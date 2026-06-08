@@ -153,6 +153,18 @@ fn normalize_content_part(part: Value) -> Option<Value> {
             "image_url": { "url": url }
         }));
     }
+    if part_type == Some("input_file") {
+        let identifier = part
+            .get("filename")
+            .or_else(|| part.get("file_id"))
+            .or_else(|| part.get("file_url"))
+            .and_then(Value::as_str)
+            .unwrap_or("attached file");
+        return Some(json!({
+            "type": "text",
+            "text": format!("[Attached file: {identifier}]")
+        }));
+    }
     let text = part
         .get("text")
         .or_else(|| part.get("content"))
@@ -509,6 +521,36 @@ mod tests {
             out["messages"][0]["content"][1]["image_url"]["url"],
             "data:image/png;base64,abc"
         );
+    }
+
+    #[test]
+    fn converts_file_content_parts_to_text_references() {
+        let input = json!({
+            "model": "gpt-4.1",
+            "input": [{
+                "type": "message",
+                "role": "user",
+                "content": [
+                    { "type": "input_text", "text": "summarize" },
+                    {
+                        "type": "input_file",
+                        "filename": "report.pdf",
+                        "file_data": "sensitive-inline-data"
+                    }
+                ]
+            }]
+        });
+
+        let out = responses_to_chat_completions(input, None);
+
+        assert_eq!(
+            out["messages"][0]["content"],
+            "summarize\n[Attached file: report.pdf]"
+        );
+        assert!(!out["messages"][0]["content"]
+            .as_str()
+            .unwrap()
+            .contains("sensitive-inline-data"));
     }
 
     #[test]
