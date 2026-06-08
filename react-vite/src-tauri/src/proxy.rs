@@ -575,12 +575,26 @@ async fn proxy_websocket(
     let config = load_proxy_config(&state.home)?;
     let accounts = core::list_accounts(&state.home).unwrap_or_default();
     let providers = providers::merged_providers(&state.home, &accounts)?;
-    let provider = routing::choose_provider(&providers, &config.routing, &[])
-        .map(|decision| decision.provider)
-        .ok_or_else(|| anyhow::anyhow!("没有可用 WebSocket 请求出口"))?;
     let uri = req.uri().clone();
     let path = uri.path().to_string();
     let query = uri.query().map(str::to_string);
+    let Some(provider) = routing::choose_provider(&providers, &config.routing, &[])
+        .map(|decision| decision.provider)
+    else {
+        record_request(
+            &state.home,
+            None,
+            &Method::GET,
+            &path,
+            None,
+            false,
+            0,
+            started.elapsed().as_millis(),
+            true,
+            Some("没有可用 WebSocket 请求出口".to_string()),
+        );
+        anyhow::bail!("没有可用 WebSocket 请求出口");
+    };
     let mut url = upstream_url(&provider, &path, query.as_deref());
     if url.starts_with("https://") {
         url = url.replacen("https://", "wss://", 1);
@@ -592,7 +606,24 @@ async fn proxy_websocket(
     if let Some(auth) = provider_auth_header(&state.home, &provider)? {
         request.headers_mut().insert("authorization", auth.parse()?);
     }
-    let (upstream_socket, _) = connect_async(request).await?;
+    let (upstream_socket, _) = match connect_async(request).await {
+        Ok(value) => value,
+        Err(error) => {
+            record_request(
+                &state.home,
+                Some(provider.name.clone()),
+                &Method::GET,
+                &path,
+                None,
+                false,
+                1,
+                started.elapsed().as_millis(),
+                true,
+                Some(sanitize_message(&error.to_string())),
+            );
+            return Err(error.into());
+        }
+    };
     record_request(
         &state.home,
         Some(provider.name.clone()),
@@ -2257,6 +2288,46 @@ mod tests {
         assert_eq!(requests[0].path, "/v1/realtime");
         assert_eq!(requests[0].status_code, Some(101));
         assert!(requests[0].success);
+        stop_proxy(&home).unwrap();
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    #[tokio::test]
+    async fn proxy_records_websocket_failure_without_provider() {
+        let _guard = TEST_PROXY_MUTEX.lock().await;
+        let home = temp_home("ws-no-provider");
+        let port = available_port().await;
+        save_proxy_config(
+            &home,
+            &ProxyConfig {
+                enabled: true,
+                port,
+                ..ProxyConfig::default()
+            },
+        )
+        .unwrap();
+
+        let state = start_proxy(home.clone()).await.unwrap();
+        let ws_url = state.listen_url.unwrap().replace("http://", "ws://") + "/v1/realtime";
+        if let Ok((mut socket, _)) = connect_async(ws_url).await {
+            let _ = socket.next().await;
+            let _ = socket.close(None).await;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        let requests = load_requests(&home);
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].provider, None);
+        assert_eq!(requests[0].method, "GET");
+        assert_eq!(requests[0].path, "/v1/realtime");
+        assert_eq!(requests[0].status_code, None);
+        assert!(!requests[0].success);
+        assert_eq!(requests[0].attempts, 0);
+        assert!(requests[0]
+            .error
+            .as_deref()
+            .unwrap()
+            .contains("没有可用 WebSocket 请求出口"));
         stop_proxy(&home).unwrap();
         let _ = std::fs::remove_dir_all(home);
     }
