@@ -171,34 +171,45 @@ fn chat_tool_calls_to_responses_events(tool_calls: &Value) -> Vec<String> {
     };
     items
         .iter()
-        .filter_map(|tool| {
+        .flat_map(|tool| {
             let id = tool
                 .get("id")
                 .and_then(Value::as_str)
                 .unwrap_or("tool_call");
             let function = tool.get("function").cloned().unwrap_or(Value::Null);
-            let name = function
-                .get("name")
-                .and_then(Value::as_str)
-                .unwrap_or("tool");
-            let arguments = function
-                .get("arguments")
-                .and_then(Value::as_str)
-                .unwrap_or("");
-            let event = json!({
-                "type": "response.output_item.added",
-                "item": {
-                    "type": "function_call",
-                    "id": id,
-                    "call_id": id,
-                    "name": name,
-                    "arguments": arguments
-                }
-            });
-            Some(format!(
-                "event: response.output_item.added\ndata: {}\n\n",
-                event
-            ))
+            let mut events = Vec::new();
+
+            if let Some(name) = function.get("name").and_then(Value::as_str) {
+                let event = json!({
+                    "type": "response.output_item.added",
+                    "item": {
+                        "type": "function_call",
+                        "id": id,
+                        "call_id": id,
+                        "name": name,
+                        "arguments": ""
+                    }
+                });
+                events.push(format!(
+                    "event: response.output_item.added\ndata: {}\n\n",
+                    event
+                ));
+            }
+
+            if let Some(arguments) = function.get("arguments").and_then(Value::as_str) {
+                let event = json!({
+                    "type": "response.function_call_arguments.delta",
+                    "item_id": id,
+                    "output_index": tool.get("index").and_then(Value::as_u64).unwrap_or_default(),
+                    "delta": arguments
+                });
+                events.push(format!(
+                    "event: response.function_call_arguments.delta\ndata: {}\n\n",
+                    event
+                ));
+            }
+
+            events
         })
         .collect()
 }
@@ -485,8 +496,20 @@ mod tests {
         )
         .unwrap();
         assert!(event.contains("response.output_item.added"));
+        assert!(event.contains("response.function_call_arguments.delta"));
         assert!(event.contains("function_call"));
         assert!(event.contains("run"));
+    }
+
+    #[test]
+    fn converts_tool_call_argument_stream_delta_without_readding_item() {
+        let event = chat_completion_chunk_to_responses_sse(
+            r#"data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"a\""}}]}}]}"#,
+        )
+        .unwrap();
+        assert!(!event.contains("response.output_item.added"));
+        assert!(event.contains("response.function_call_arguments.delta"));
+        assert!(event.contains(r#"{\"a\""#));
     }
 
     #[test]
