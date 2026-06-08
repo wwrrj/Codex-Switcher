@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react'
-import { X, AlertTriangle, LogOut, RefreshCw } from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
+import { X, AlertTriangle, LogOut, RefreshCw, Upload } from 'lucide-react'
 import { useAppStore } from '@/store/appStore'
 import { detectCodexAuth, detectCurrentAuthEmail, prepareNewAccountLogin } from '@/lib/api'
 import { validateAccountName, cn } from '@/lib/utils'
@@ -11,10 +11,15 @@ interface Props {
 
 export default function AddAccountDialog({ open, onClose }: Props) {
   const addAccount = useAppStore((s) => s.addAccount)
+  const importAccountsFromJson = useAppStore((s) => s.importAccountsFromJson)
   const accounts = useAppStore((s) => s.accounts)
+  const fileInputRef = useRef<HTMLInputElement | null>(null)
   const [name, setName] = useState('')
   const [note, setNote] = useState('')
   const [error, setError] = useState<string | null>(null)
+  const [importError, setImportError] = useState<string | null>(null)
+  const [importing, setImporting] = useState(false)
+  const [importOverwrite, setImportOverwrite] = useState(false)
   const [showOverwrite, setShowOverwrite] = useState(false)
   const [stage, setStage] = useState<'checking' | 'needs-login' | 'waiting' | 'ready'>('checking')
   const [statusText, setStatusText] = useState('正在检测当前 Codex 登录状态...')
@@ -135,10 +140,34 @@ export default function AddAccountDialog({ open, onClose }: Props) {
     }
   }
 
+  const handleImportFile = async (file: File | null) => {
+    if (!file) return
+    if (!file.name.toLowerCase().endsWith('.json')) {
+      setImportError('请选择 .json 文件；压缩包请先解压后导入其中的 JSON。')
+      return
+    }
+
+    try {
+      setImporting(true)
+      setImportError(null)
+      const text = await file.text()
+      await importAccountsFromJson(text, importOverwrite)
+      handleClose()
+    } catch (e: unknown) {
+      setImportError(e instanceof Error ? e.message : '导入 JSON 失败')
+    } finally {
+      setImporting(false)
+      if (fileInputRef.current) fileInputRef.current.value = ''
+    }
+  }
+
   const handleClose = () => {
     setName('')
     setNote('')
     setError(null)
+    setImportError(null)
+    setImporting(false)
+    setImportOverwrite(false)
     setShowOverwrite(false)
     setStage('checking')
     setStatusText('正在检测当前 Codex 登录状态...')
@@ -149,9 +178,9 @@ export default function AddAccountDialog({ open, onClose }: Props) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center" data-component="AddAccountDialog">
       <div className="absolute inset-0 bg-black/40" onClick={handleClose} />
-      <div className="relative w-[400px] max-w-[90vw] bg-bg-surface border border-line rounded-lg card-ring">
+      <div className="relative w-[440px] max-w-[90vw] bg-bg-surface border border-line rounded-lg card-ring">
         <div className="flex items-center justify-between px-4 py-3 border-b border-line">
-          <h3 className="text-sm font-semibold text-fg font-serif">添加当前 Codex 账号</h3>
+          <h3 className="text-sm font-semibold text-fg font-serif">添加 / 导入 Codex 账号</h3>
           <button onClick={handleClose} className="w-6 h-6 flex items-center justify-center rounded-md text-fg-muted hover:text-fg hover:bg-bg-hover">
             <X className="w-3.5 h-3.5" />
           </button>
@@ -230,6 +259,44 @@ export default function AddAccountDialog({ open, onClose }: Props) {
                 />
               </div>
             </>
+          )}
+
+          {!showOverwrite && (
+            <div className="pt-3 border-t border-line-subtle">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p className="text-xs font-medium text-fg">导入号池 JSON</p>
+                  <p className="text-[11px] text-fg-muted mt-1 leading-relaxed">
+                    支持单账号 JSON、账号数组，以及 accounts/items/data/list 包装格式；会自动识别邮箱、订阅、备注和优先标记。
+                  </p>
+                </div>
+                <button
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={importing}
+                  className="inline-flex shrink-0 items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium text-primary bg-primary-muted hover:bg-primary/15 disabled:opacity-50 transition-colors"
+                >
+                  {importing ? <RefreshCw className="w-3 h-3 animate-spin" /> : <Upload className="w-3 h-3" />}
+                  {importing ? '导入中' : '选择 JSON'}
+                </button>
+              </div>
+              <label className="mt-3 flex items-center justify-between gap-3 rounded-md bg-bg-elevated border border-line-subtle px-3 py-2">
+                <span className="text-xs text-fg-muted">覆盖已存在账号</span>
+                <input
+                  type="checkbox"
+                  checked={importOverwrite}
+                  onChange={(e) => setImportOverwrite(e.target.checked)}
+                  className="accent-primary"
+                />
+              </label>
+              {importError && <p className="text-xs text-danger mt-2">{importError}</p>}
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="application/json,.json"
+                className="hidden"
+                onChange={(e) => void handleImportFile(e.target.files?.[0] ?? null)}
+              />
+            </div>
           )}
         </div>
 

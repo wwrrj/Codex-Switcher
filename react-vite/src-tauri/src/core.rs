@@ -2033,6 +2033,448 @@ pub fn add_account(
     })
 }
 
+fn sanitize_imported_account_name(raw: &str) -> String {
+    let cleaned: String = raw
+        .trim()
+        .chars()
+        .map(|ch| match ch {
+            '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*' => '_',
+            ch if ch.is_control() => '_',
+            ch => ch,
+        })
+        .collect();
+    let cleaned = cleaned.trim_matches([' ', '.']).to_string();
+    if cleaned.is_empty() {
+        "imported-account".to_string()
+    } else {
+        cleaned
+    }
+}
+
+fn value_string_by_alias<'a>(value: &'a Value, aliases: &[&str]) -> Option<&'a str> {
+    let Value::Object(map) = value else {
+        return None;
+    };
+    aliases.iter().find_map(|alias| {
+        map.get(*alias)
+            .and_then(Value::as_str)
+            .filter(|s| !s.trim().is_empty())
+    })
+}
+
+fn bool_by_alias(value: &Value, aliases: &[&str]) -> Option<bool> {
+    let Value::Object(map) = value else {
+        return None;
+    };
+    aliases.iter().find_map(|alias| {
+        let v = map.get(*alias)?;
+        v.as_bool().or_else(|| {
+            v.as_str()
+                .and_then(|s| match s.trim().to_lowercase().as_str() {
+                    "true" | "yes" | "1" | "priority" | "starred" | "favorite" => Some(true),
+                    "false" | "no" | "0" => Some(false),
+                    _ => None,
+                })
+        })
+    })
+}
+
+fn directly_looks_like_auth_value(value: &Value) -> bool {
+    if string_at_path(value, &["tokens", "access_token"]).is_some()
+        || string_at_path(value, &["tokens", "id_token"]).is_some()
+        || string_at_path(value, &["tokens", "refresh_token"]).is_some()
+        || string_at_path(value, &["OPENAI_API_KEY"]).is_some()
+        || string_at_path(value, &["access_token"]).is_some()
+        || string_at_path(value, &["id_token"]).is_some()
+        || string_at_path(value, &["idToken"]).is_some()
+        || string_at_path(value, &["refresh_token"]).is_some()
+    {
+        return true;
+    }
+
+    false
+}
+
+fn looks_like_auth_value(value: &Value) -> bool {
+    if directly_looks_like_auth_value(value) {
+        return true;
+    }
+
+    find_token(value).is_some()
+}
+
+fn find_nested_auth_value(value: &Value) -> Option<&Value> {
+    const AUTH_KEYS: &[&str] = &[
+        "auth",
+        "auth_json",
+        "authJson",
+        "authData",
+        "credential",
+        "credentials",
+        "token",
+        "tokens",
+        "account",
+    ];
+
+    if directly_looks_like_auth_value(value) {
+        return Some(value);
+    }
+
+    let Value::Object(map) = value else {
+        return None;
+    };
+
+    for key in AUTH_KEYS {
+        if let Some(child) = map.get(*key) {
+            if directly_looks_like_auth_value(child) || looks_like_auth_value(child) {
+                return Some(child);
+            }
+        }
+    }
+
+    map.values()
+        .find(|child| directly_looks_like_auth_value(child) || looks_like_auth_value(child))
+}
+
+fn collect_import_entries<'a>(value: &'a Value, out: &mut Vec<&'a Value>) {
+    const POOL_KEYS: &[&str] = &[
+        "accounts",
+        "items",
+        "data",
+        "list",
+        "records",
+        "credentials",
+        "tokens",
+        "results",
+    ];
+
+    match value {
+        Value::Array(items) => {
+            for item in items {
+                collect_import_entries(item, out);
+            }
+        }
+        Value::Object(map) => {
+            if directly_looks_like_auth_value(value) {
+                out.push(value);
+                return;
+            }
+
+            let mut matched_pool = false;
+            for key in POOL_KEYS {
+                if let Some(child) = map.get(*key) {
+                    if matches!(child, Value::Array(_)) {
+                        matched_pool = true;
+                        collect_import_entries(child, out);
+                    }
+                }
+            }
+
+            if !matched_pool {
+                if find_nested_auth_value(value).is_some() {
+                    out.push(value);
+                    return;
+                }
+                for child in map.values() {
+                    if matches!(child, Value::Array(_)) {
+                        collect_import_entries(child, out);
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+fn normalize_auth_json(auth: &Value) -> Value {
+    let mut root = serde_json::Map::new();
+    let has_tokens_object = auth.get("tokens").and_then(Value::as_object).is_some();
+    let has_top_level_oauth = string_at_path(auth, &["access_token"]).is_some()
+        || string_at_path(auth, &["id_token"]).is_some()
+        || string_at_path(auth, &["idToken"]).is_some()
+        || string_at_path(auth, &["refresh_token"]).is_some()
+        || string_at_path(auth, &["account_id"]).is_some();
+
+    if has_tokens_object || string_at_path(auth, &["OPENAI_API_KEY"]).is_some() {
+        let mut normalized = auth.clone();
+        if has_top_level_oauth {
+            if let Some(map) = normalized.as_object_mut() {
+                let mut tokens = map
+                    .get("tokens")
+                    .and_then(Value::as_object)
+                    .cloned()
+                    .unwrap_or_default();
+                for (from, to) in [
+                    ("access_token", "access_token"),
+                    ("id_token", "id_token"),
+                    ("idToken", "id_token"),
+                    ("refresh_token", "refresh_token"),
+                    ("account_id", "account_id"),
+                ] {
+                    if let Some(value) = auth.get(from).cloned() {
+                        tokens.entry(to.to_string()).or_insert(value);
+                    }
+                }
+                map.insert("tokens".to_string(), Value::Object(tokens));
+            }
+        }
+        return normalized;
+    }
+
+    if let Some(api_key) = auth.get("OPENAI_API_KEY").cloned() {
+        root.insert("OPENAI_API_KEY".to_string(), api_key);
+        root.insert(
+            "auth_mode".to_string(),
+            Value::String("api_key".to_string()),
+        );
+        return Value::Object(root);
+    }
+
+    root.insert("OPENAI_API_KEY".to_string(), Value::Null);
+    root.insert(
+        "auth_mode".to_string(),
+        Value::String(
+            value_string_by_alias(auth, &["auth_mode", "authMode"])
+                .unwrap_or("chatgpt")
+                .to_string(),
+        ),
+    );
+    if let Some(last_refresh) = auth.get("last_refresh").cloned() {
+        root.insert("last_refresh".to_string(), last_refresh);
+    } else {
+        root.insert(
+            "last_refresh".to_string(),
+            Value::String(Utc::now().to_rfc3339()),
+        );
+    }
+
+    let mut tokens = serde_json::Map::new();
+    for (from, to) in [
+        ("access_token", "access_token"),
+        ("id_token", "id_token"),
+        ("idToken", "id_token"),
+        ("refresh_token", "refresh_token"),
+        ("account_id", "account_id"),
+    ] {
+        if let Some(value) = auth.get(from).cloned() {
+            tokens.insert(to.to_string(), value);
+        }
+    }
+    root.insert("tokens".to_string(), Value::Object(tokens));
+
+    Value::Object(root)
+}
+
+fn imported_account_name(entry: &Value, auth: &Value, fallback_index: usize) -> String {
+    let explicit = value_string_by_alias(
+        entry,
+        &[
+            "email",
+            "account_email",
+            "accountEmail",
+            "username",
+            "user",
+            "name",
+            "displayName",
+            "account",
+        ],
+    )
+    .map(String::from)
+    .or_else(|| find_email_in_value(entry))
+    .or_else(|| find_email_in_value(auth));
+
+    explicit
+        .map(|name| sanitize_imported_account_name(&name))
+        .unwrap_or_else(|| format!("imported-account-{}", fallback_index + 1))
+}
+
+fn imported_note(entry: &Value) -> Option<String> {
+    value_string_by_alias(
+        entry,
+        &[
+            "note",
+            "remark",
+            "remarks",
+            "comment",
+            "label",
+            "description",
+            "memo",
+        ],
+    )
+    .map(str::trim)
+    .filter(|s| !s.is_empty())
+    .map(String::from)
+}
+
+fn imported_plan(entry: &Value, auth: &Value) -> Option<SubscriptionPlan> {
+    value_string_by_alias(
+        entry,
+        &[
+            "type",
+            "plan",
+            "subscription",
+            "tier",
+            "account_type",
+            "accountType",
+            "sku",
+        ],
+    )
+    .or_else(|| {
+        value_string_by_alias(
+            auth,
+            &[
+                "type",
+                "plan",
+                "subscription",
+                "tier",
+                "account_type",
+                "accountType",
+                "sku",
+            ],
+        )
+    })
+    .and_then(plan_from_raw)
+}
+
+fn build_account_meta_from_file(
+    name: &str,
+    note: Option<String>,
+    priority: Option<bool>,
+    manual_override: Option<SubscriptionPlan>,
+    auth_file: &Path,
+    created_at: String,
+    updated_at: String,
+) -> Result<AccountMeta> {
+    let subscription = manual_override
+        .clone()
+        .map(manual_subscription)
+        .or_else(|| detect_subscription_from_auth_file(auth_file).ok());
+    let (health, health_message, auth_tokens) = account_health(auth_file);
+
+    Ok(AccountMeta {
+        name: name.to_string(),
+        note,
+        created_at,
+        updated_at,
+        sha256_prefix: Some(sha256_prefix(auth_file)?),
+        size: Some(file_size(auth_file)?),
+        is_active: Some(false),
+        priority,
+        subscription,
+        usage: None,
+        last_usage_check_at: None,
+        manual_subscription_override: manual_override,
+        source: Some("imported_json".to_string()),
+        health,
+        health_message,
+        auth_tokens,
+    })
+}
+
+pub fn import_accounts_from_json(
+    home: &Path,
+    json_text: &str,
+    overwrite: bool,
+) -> Result<ImportAccountsResult> {
+    let root: Value = serde_json::from_str(json_text).context("解析导入 JSON 失败")?;
+    let mut entries = Vec::new();
+    collect_import_entries(&root, &mut entries);
+    if entries.is_empty() {
+        return Err(anyhow::anyhow!(
+            "未识别到可导入账号：需要 access_token、id_token、refresh_token、OPENAI_API_KEY 或包含这些字段的 auth 对象"
+        ));
+    }
+
+    ensure_dir(&accounts_dir(home))?;
+    let mut imported = Vec::new();
+    let mut overwritten = Vec::new();
+    let mut skipped = Vec::new();
+    let mut seen_names = std::collections::HashSet::new();
+    let mut priorities = load_priorities(home)?;
+    let mut changed_priorities = false;
+
+    for (idx, entry) in entries.into_iter().enumerate() {
+        let Some(auth_source) = find_nested_auth_value(entry) else {
+            skipped.push(format!("第 {} 项缺少 auth/token 字段", idx + 1));
+            continue;
+        };
+        let auth_json = normalize_auth_json(auth_source);
+        if !looks_like_auth_value(&auth_json) {
+            skipped.push(format!("第 {} 项无法规范化为 auth.json", idx + 1));
+            continue;
+        }
+
+        let name = imported_account_name(entry, &auth_json, idx);
+        if !seen_names.insert(name.clone()) {
+            skipped.push(format!("{}：导入文件内存在重复账号名", name));
+            continue;
+        }
+
+        let acc_dir = accounts_dir(home).join(&name);
+        if acc_dir.exists() && !overwrite {
+            skipped.push(format!("{}：账号已存在", name));
+            continue;
+        }
+        if acc_dir.exists() && overwrite {
+            backup_auth(home, 10)?;
+            overwritten.push(name.clone());
+        }
+
+        ensure_dir(&acc_dir)?;
+        let auth_file = acc_dir.join("auth.json");
+        write_json(&auth_file, &auth_json)?;
+
+        let now = Utc::now().to_rfc3339();
+        let note = imported_note(entry);
+        let priority = bool_by_alias(
+            entry,
+            &[
+                "priority",
+                "is_priority",
+                "isPriority",
+                "favorite",
+                "starred",
+            ],
+        );
+        let manual_override = imported_plan(entry, &auth_json);
+        let meta = AccountMetaFile {
+            name: name.clone(),
+            note: note.clone(),
+            created_at: now.clone(),
+            updated_at: now.clone(),
+            priority,
+            manual_subscription_override: manual_override.clone(),
+        };
+        write_account_meta_file(&acc_dir.join("meta.json"), &meta)?;
+
+        if let Some(priority) = priority {
+            priorities.insert(name.clone(), priority);
+            changed_priorities = true;
+        }
+
+        imported.push(build_account_meta_from_file(
+            &name,
+            note,
+            priority,
+            manual_override,
+            &auth_file,
+            now.clone(),
+            now,
+        )?);
+    }
+
+    if changed_priorities {
+        ensure_dir(&config_dir(home))?;
+        write_json(&priority_file(home), &serde_json::to_value(&priorities)?)?;
+    }
+
+    Ok(ImportAccountsResult {
+        imported,
+        overwritten,
+        skipped,
+    })
+}
+
 pub fn prepare_new_account_login(home: &Path) -> Result<NewAccountLoginPreparation> {
     let accounts = list_accounts(home)?;
     let names: Vec<String> = accounts
@@ -2368,4 +2810,85 @@ pub fn get_app_state(custom_home: Option<&str>) -> Result<AppState> {
         switch_history: get_switch_history(&actual_home).unwrap_or_default(),
         scheduler: get_scheduler_state(&actual_home)?,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temp_home(name: &str) -> PathBuf {
+        let path = std::env::temp_dir().join(format!(
+            "codex-switcher-test-{}-{}",
+            name,
+            Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ));
+        std::fs::create_dir_all(&path).unwrap();
+        path
+    }
+
+    #[test]
+    fn imports_pickup_plus_json_shape() {
+        let home = temp_home("pickup-plus");
+        let json = r#"{
+            "id_token": "header.payload.signature",
+            "access_token": "access-token",
+            "refresh_token": "refresh-token",
+            "account_id": "acc_123",
+            "last_refresh": "2026-06-08T00:00:00Z",
+            "email": "user@example.com",
+            "type": "Plus",
+            "expired": "2026-06-15T00:00:00Z"
+        }"#;
+
+        let result = import_accounts_from_json(&home, json, false).unwrap();
+        assert_eq!(result.imported.len(), 1);
+        assert_eq!(result.imported[0].name, "user@example.com");
+        assert_eq!(
+            result.imported[0].manual_subscription_override,
+            Some(SubscriptionPlan::Plus)
+        );
+
+        let auth = read_json(
+            &accounts_dir(&home)
+                .join("user@example.com")
+                .join("auth.json"),
+        )
+        .unwrap();
+        assert_eq!(string_at_path(&auth, &["auth_mode"]), Some("chatgpt"));
+        assert_eq!(
+            string_at_path(&auth, &["tokens", "access_token"]),
+            Some("access-token")
+        );
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    #[test]
+    fn imports_account_pool_wrapped_auth_json() {
+        let home = temp_home("pool");
+        let json = r#"{
+            "accounts": [
+                {
+                    "name": "work@example.com",
+                    "note": "Work",
+                    "priority": true,
+                    "auth": {
+                        "tokens": {
+                            "access_token": "access",
+                            "refresh_token": "refresh"
+                        }
+                    }
+                }
+            ]
+        }"#;
+
+        let result = import_accounts_from_json(&home, json, false).unwrap();
+        assert_eq!(result.imported.len(), 1);
+        assert_eq!(result.imported[0].name, "work@example.com");
+        assert_eq!(result.imported[0].note.as_deref(), Some("Work"));
+        assert_eq!(result.imported[0].priority, Some(true));
+
+        let priorities = load_priorities(&home).unwrap();
+        assert_eq!(priorities.get("work@example.com"), Some(&true));
+        let _ = std::fs::remove_dir_all(home);
+    }
 }

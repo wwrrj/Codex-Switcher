@@ -203,6 +203,14 @@ pub struct AccountMeta {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ImportAccountsResult {
+    pub imported: Vec<AccountMeta>,
+    pub overwritten: Vec<String>,
+    pub skipped: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CodexAuthStatus {
     pub codex_home: String,
     pub auth_path: String,

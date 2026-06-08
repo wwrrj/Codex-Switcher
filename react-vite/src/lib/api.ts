@@ -1,6 +1,6 @@
 import { invoke } from '@tauri-apps/api/core'
 import { isPermissionGranted, requestPermission, sendNotification } from '@tauri-apps/plugin-notification'
-import type { AccountMeta, CodexAuthStatus, CodexUsageInfo, AppSettings, AppLog, AppState, SubscriptionInfo, SubscriptionPlan, TokenUsageSummary, NewAccountLoginPreparation, SwitchHistoryEntry, SwitchRecommendation, SchedulerConfig, SchedulerHistoryEntry, SchedulerState } from './types'
+import type { AccountMeta, CodexAuthStatus, CodexUsageInfo, AppSettings, AppLog, AppState, SubscriptionInfo, SubscriptionPlan, TokenUsageSummary, NewAccountLoginPreparation, SwitchHistoryEntry, SwitchRecommendation, SchedulerConfig, SchedulerHistoryEntry, SchedulerState, ImportAccountsResult } from './types'
 
 // ── Frontend-only log management ──
 
@@ -50,6 +50,18 @@ export async function addCurrentAccount(name: string, note?: string, overwrite?:
   const account = await invoke<AccountMeta>('add_account', { name, note: note ?? null, overwrite: overwrite ?? false })
   addLog('success', `已添加账号「${name}」`)
   return account
+}
+
+export async function importAccountsFromJson(jsonText: string, overwrite?: boolean): Promise<ImportAccountsResult> {
+  const result = await invoke<ImportAccountsResult>('import_accounts_from_json', {
+    jsonText,
+    overwrite: overwrite ?? false,
+  })
+  addLog('success', `已从 JSON 导入 ${result.imported.length} 个账号`)
+  if (result.skipped.length > 0) {
+    addLog('warning', `JSON 导入跳过 ${result.skipped.length} 项`)
+  }
+  return result
 }
 
 export async function prepareNewAccountLogin(): Promise<NewAccountLoginPreparation> {

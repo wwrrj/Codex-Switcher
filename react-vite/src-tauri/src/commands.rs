@@ -80,6 +80,19 @@ pub async fn add_account(
 }
 
 #[tauri::command]
+pub async fn import_accounts_from_json(
+    json_text: String,
+    overwrite: Option<bool>,
+) -> Result<ImportAccountsResult, String> {
+    blocking(move || {
+        let actual_home = actual_home()?;
+        core::import_accounts_from_json(&actual_home, &json_text, overwrite.unwrap_or(false))
+            .map_err(|e| e.to_string())
+    })
+    .await
+}
+
+#[tauri::command]
 pub async fn prepare_new_account_login() -> Result<NewAccountLoginPreparation, String> {
     blocking(move || {
         let actual_home = actual_home()?;

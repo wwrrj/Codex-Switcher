@@ -41,6 +41,7 @@ pub fn run() {
             refresh_active_auth_tokens,
             list_accounts,
             add_account,
+            import_accounts_from_json,
             prepare_new_account_login,
             remove_account,
             rename_account,

@@ -117,6 +117,12 @@ export interface AccountMeta {
   authTokens: AuthTokenInfo[];
 }
 
+export interface ImportAccountsResult {
+  imported: AccountMeta[];
+  overwritten: string[];
+  skipped: string[];
+}
+
 export interface AuthTokenInfo {
   kind: string;
   present: boolean;

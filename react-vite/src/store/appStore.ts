@@ -129,6 +129,7 @@ interface AppStore {
   selectAccount: (name: string) => void
   switchToAccount: (name: string) => Promise<void>
   addAccount: (name: string, note?: string, overwrite?: boolean) => Promise<void>
+  importAccountsFromJson: (jsonText: string, overwrite?: boolean) => Promise<void>
   deleteAccount: (name: string, force?: boolean) => Promise<void>
   renameAccount: (oldName: string, newName: string) => Promise<void>
   refreshAuth: () => Promise<void>
@@ -264,6 +265,29 @@ export const useAppStore = create<AppStore>((set, get) => ({
       set({ accounts, authStatus, activeAccount: active, selectedAccount: active, logs: api.getLogs() })
       void api.refreshTrayMenu()
       get().addToast('success', `已添加账号「${name}」`)
+    } catch (e: unknown) {
+      throw e
+    }
+  },
+
+  importAccountsFromJson: async (jsonText, overwrite) => {
+    try {
+      const result = await api.importAccountsFromJson(jsonText, overwrite)
+      const accounts = await api.listAccounts()
+      const active = accounts.find((account) => account.isActive)?.name ?? get().activeAccount
+      const selected = result.imported[0]?.name ?? get().selectedAccount ?? active
+      const authStatus = await api.detectCodexAuth()
+      set({
+        accounts,
+        authStatus,
+        activeAccount: active ?? null,
+        selectedAccount: selected ?? null,
+        logs: api.getLogs(),
+      })
+      void api.refreshTrayMenu()
+      const skipped = result.skipped.length > 0 ? `，跳过 ${result.skipped.length} 项` : ''
+      const overwritten = result.overwritten.length > 0 ? `，覆盖 ${result.overwritten.length} 个` : ''
+      get().addToast('success', `已导入 ${result.imported.length} 个账号${overwritten}${skipped}`)
     } catch (e: unknown) {
       throw e
     }
