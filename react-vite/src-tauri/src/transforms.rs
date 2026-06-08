@@ -19,13 +19,7 @@ pub fn responses_to_chat_completions(mut input: Value, model_override: Option<&s
         "stream": stream
     });
 
-    for key in [
-        "temperature",
-        "top_p",
-        "max_output_tokens",
-        "tools",
-        "tool_choice",
-    ] {
+    for key in ["temperature", "top_p", "max_output_tokens", "tool_choice"] {
         if let Some(value) = input.get(key).cloned() {
             let out_key = match key {
                 "max_output_tokens" => "max_tokens",
@@ -33,6 +27,9 @@ pub fn responses_to_chat_completions(mut input: Value, model_override: Option<&s
             };
             output[out_key] = value;
         }
+    }
+    if let Some(tools) = input.get("tools").cloned() {
+        output["tools"] = normalize_tools(tools);
     }
 
     if let Some(reasoning) = input.get("reasoning").cloned() {
@@ -50,7 +47,11 @@ fn normalize_messages(input: Value) -> Value {
                 .into_iter()
                 .map(|item| {
                     if item.get("role").is_some() && item.get("content").is_some() {
-                        return item;
+                        let mut message = item;
+                        if let Some(content) = message.get("content").cloned() {
+                            message["content"] = normalize_content(content);
+                        }
+                        return message;
                     }
                     if item.get("type").and_then(Value::as_str) == Some("message") {
                         let role = item.get("role").and_then(Value::as_str).unwrap_or("user");
@@ -59,6 +60,23 @@ fn normalize_messages(input: Value) -> Value {
                             .cloned()
                             .unwrap_or(Value::String(String::new()));
                         return json!({ "role": role, "content": normalize_content(content) });
+                    }
+                    if item.get("type").and_then(Value::as_str) == Some("function_call_output") {
+                        let call_id = item
+                            .get("call_id")
+                            .or_else(|| item.get("id"))
+                            .and_then(Value::as_str)
+                            .unwrap_or("tool_call");
+                        let output = item
+                            .get("output")
+                            .or_else(|| item.get("content"))
+                            .cloned()
+                            .unwrap_or(Value::String(String::new()));
+                        return json!({
+                            "role": "tool",
+                            "tool_call_id": call_id,
+                            "content": normalize_content(output)
+                        });
                     }
                     json!({ "role": "user", "content": item.to_string() })
                 })
@@ -74,20 +92,77 @@ fn normalize_content(content: Value) -> Value {
     match content {
         Value::String(_) => content,
         Value::Array(parts) => {
-            let text = parts
+            let converted = parts
                 .into_iter()
-                .filter_map(|part| {
-                    part.get("text")
-                        .or_else(|| part.get("content"))
-                        .and_then(Value::as_str)
-                        .map(str::to_string)
-                })
-                .collect::<Vec<_>>()
-                .join("\n");
-            Value::String(text)
+                .filter_map(normalize_content_part)
+                .collect::<Vec<_>>();
+            let has_non_text = converted
+                .iter()
+                .any(|part| part.get("type").and_then(Value::as_str) != Some("text"));
+            if has_non_text {
+                Value::Array(converted)
+            } else {
+                Value::String(
+                    converted
+                        .iter()
+                        .filter_map(|part| part.get("text").and_then(Value::as_str))
+                        .collect::<Vec<_>>()
+                        .join("\n"),
+                )
+            }
         }
         other => Value::String(other.to_string()),
     }
+}
+
+fn normalize_content_part(part: Value) -> Option<Value> {
+    let part_type = part.get("type").and_then(Value::as_str);
+    if matches!(part_type, Some("input_image" | "image_url")) {
+        let url = part
+            .get("image_url")
+            .and_then(|value| {
+                value
+                    .as_str()
+                    .map(str::to_string)
+                    .or_else(|| value.get("url").and_then(Value::as_str).map(str::to_string))
+            })
+            .or_else(|| part.get("url").and_then(Value::as_str).map(str::to_string))?;
+        return Some(json!({
+            "type": "image_url",
+            "image_url": { "url": url }
+        }));
+    }
+    let text = part
+        .get("text")
+        .or_else(|| part.get("content"))
+        .and_then(Value::as_str)?;
+    Some(json!({ "type": "text", "text": text }))
+}
+
+fn normalize_tools(tools: Value) -> Value {
+    let Value::Array(items) = tools else {
+        return tools;
+    };
+    Value::Array(
+        items
+            .into_iter()
+            .map(|tool| {
+                if tool.get("type").and_then(Value::as_str) == Some("function")
+                    && tool.get("function").is_none()
+                {
+                    return json!({
+                        "type": "function",
+                        "function": {
+                            "name": tool.get("name").cloned().unwrap_or(Value::String("tool".to_string())),
+                            "description": tool.get("description").cloned().unwrap_or(Value::String(String::new())),
+                            "parameters": tool.get("parameters").cloned().unwrap_or_else(|| json!({ "type": "object", "properties": {} }))
+                        }
+                    });
+                }
+                tool
+            })
+            .collect(),
+    )
 }
 
 fn chat_tool_calls_to_responses_events(tool_calls: &Value) -> Vec<String> {
@@ -320,6 +395,62 @@ mod tests {
         });
         let out = responses_to_chat_completions(input, None);
         assert_eq!(out["reasoning"]["effort"], "high");
+    }
+
+    #[test]
+    fn converts_response_tools_to_chat_function_tools() {
+        let input = json!({
+            "model": "gpt-4.1",
+            "input": "hello",
+            "tools": [{
+                "type": "function",
+                "name": "lookup",
+                "description": "Lookup data",
+                "parameters": { "type": "object", "properties": { "q": { "type": "string" } } }
+            }]
+        });
+        let out = responses_to_chat_completions(input, None);
+        assert_eq!(out["tools"][0]["type"], "function");
+        assert_eq!(out["tools"][0]["function"]["name"], "lookup");
+        assert_eq!(out["tools"][0]["function"]["parameters"]["type"], "object");
+    }
+
+    #[test]
+    fn preserves_image_content_parts_for_chat_providers() {
+        let input = json!({
+            "model": "gpt-4.1",
+            "input": [{
+                "type": "message",
+                "role": "user",
+                "content": [
+                    { "type": "input_text", "text": "describe" },
+                    { "type": "input_image", "image_url": "data:image/png;base64,abc" }
+                ]
+            }]
+        });
+        let out = responses_to_chat_completions(input, None);
+        assert_eq!(out["messages"][0]["content"][0]["type"], "text");
+        assert_eq!(out["messages"][0]["content"][1]["type"], "image_url");
+        assert_eq!(
+            out["messages"][0]["content"][1]["image_url"]["url"],
+            "data:image/png;base64,abc"
+        );
+    }
+
+    #[test]
+    fn converts_function_call_output_to_tool_message() {
+        let input = json!({
+            "model": "gpt-4.1",
+            "input": [{
+                "type": "function_call_output",
+                "call_id": "call_1",
+                "output": "done"
+            }]
+        });
+        let out = responses_to_chat_completions(input, None);
+        assert_eq!(out["messages"][0]["role"], "tool");
+        assert_eq!(out["messages"][0]["tool_call_id"], "call_1");
+        assert_eq!(out["messages"][0]["content"], "done");
     }
 
     #[test]
