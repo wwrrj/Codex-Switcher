@@ -10,9 +10,9 @@ Status legend:
 
 ## Current Completion
 
-Estimated completion: `96%-98%`.
+Estimated completion: `97%-98%`.
 
-The core proxy phase is implemented and covered by automated tests, packaging, release startup, a controlled proxy smoke test, and a non-destructive core regression for proxy-disabled account switching. The only remaining work before declaring the phase fully complete is a manual UI regression pass for account switching with proxy disabled, because that path depends on the installed desktop environment and real Codex process behavior.
+The core proxy phase is implemented and covered by automated tests, packaging, release startup, isolated `CODEX_HOME` startup, a controlled proxy smoke test, and a non-destructive core regression for proxy-disabled account switching. The only remaining work before declaring the phase fully complete is a manual UI regression pass for account switching with proxy disabled, because that path depends on the installed desktop environment and real Codex process behavior.
 
 ## Core Proxy
 
@@ -22,6 +22,7 @@ The core proxy phase is implemented and covered by automated tests, packaging, r
 | Proxy lifecycle start / stop | Done | `start_proxy`, `stop_proxy`, test `start_and_stop_proxy_manage_codex_config` |
 | Codex `chatgpt_base_url` install / restore | Done | `codex_config.rs`, tests `install_and_restore_preserves_other_fields`, `restore_preserves_user_changes_after_install`, `start_and_stop_proxy_manage_codex_config` |
 | Proxy startup restore | Done | `restore_proxy_on_startup`, test `startup_restore_starts_proxy_and_restores_mobile_residency` |
+| `CODEX_HOME` isolated startup support | Done | `codex_home(None)` respects `CODEX_HOME` when no custom path is set; tests `codex_home_uses_env_when_custom_home_is_not_set`, `codex_home_custom_path_overrides_env` |
 | HTTP forwarding | Done | `proxy_request`, `forward_once`, test `proxy_forwards_responses_to_chat_completions_provider` |
 | SSE forwarding and conversion | Done | `response_from_reqwest`, `ChatCompletionSseTransformer`, tests `proxy_buffers_split_chat_sse_chunks`, `proxy_records_broken_sse_stream_after_headers` |
 | WebSocket forwarding | Done | `proxy_websocket`, test `proxy_bridges_websocket_messages` |
@@ -112,12 +113,13 @@ The core proxy phase is implemented and covered by automated tests, packaging, r
 
 | Gate | Status | Last Known Result |
 | --- | --- | --- |
-| `cargo test` | Done | 75 tests passed on 2026-06-08 after adding proxy-disabled account switch regression |
+| `cargo test` | Done | 77 tests passed on 2026-06-08 after adding proxy-disabled account switch regression and `CODEX_HOME` isolation coverage |
 | `cargo build` | Done | Passed on 2026-06-08 after commit `6e8954e` |
 | `npm run build` | Done | Passed on 2026-06-08 after commit `6e8954e` |
 | `git diff --check` | Done | Passed on 2026-06-08 after commit `6e8954e` |
 | `npm exec tauri -- build` | Done | Passed on 2026-06-08; produced MSI and NSIS bundles |
 | Real app startup verification | Done | Release executable started as process `codex-switcher` and was stopped successfully |
+| Isolated release startup with `CODEX_HOME` | Done | Release executable started with a temporary Codex home containing `config/proxy.json`; proxy opened `127.0.0.1:14651`, proving the packaged app read the isolated home; test process was stopped and temporary home removed |
 | Controlled proxy request through command path | Done | `phase2_proxy_smoke_installs_routes_restores_and_redacts_logs` starts proxy, installs config, sends `/v1/responses`, restores config, and checks logs |
 | Proxy-disabled core account-switch regression | Done | `switch_account_replaces_auth_when_proxy_is_disabled` verifies auth replacement, backup creation, and switch history without touching the real Codex home |
 | Real UI account-switch regression | Needs E2E | Not yet re-run manually with real Codex process behavior |

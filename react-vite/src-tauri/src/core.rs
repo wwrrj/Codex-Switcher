@@ -33,6 +33,13 @@ pub fn codex_home(custom: Option<&str>) -> Result<PathBuf> {
         }
         return Err(anyhow::anyhow!("自定义路径不存在: {}", p));
     }
+    if let Ok(p) = std::env::var("CODEX_HOME") {
+        let pb = PathBuf::from(&p);
+        if pb.exists() {
+            return Ok(pb);
+        }
+        return Err(anyhow::anyhow!("CODEX_HOME 路径不存在: {}", p));
+    }
     let home = dirs::home_dir().context("无法检测用户主目录")?;
     Ok(home.join(".codex"))
 }
@@ -2865,6 +2872,9 @@ pub fn get_app_state(custom_home: Option<&str>) -> Result<AppState> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    static CODEX_HOME_ENV_LOCK: Mutex<()> = Mutex::new(());
 
     fn temp_home(name: &str) -> PathBuf {
         let path = std::env::temp_dir().join(format!(
@@ -2959,6 +2969,44 @@ mod tests {
         let priorities = load_priorities(&home).unwrap();
         assert_eq!(priorities.get("work@example.com"), Some(&true));
         let _ = std::fs::remove_dir_all(home);
+    }
+
+    #[test]
+    fn codex_home_uses_env_when_custom_home_is_not_set() {
+        let _guard = CODEX_HOME_ENV_LOCK.lock().unwrap();
+        let previous = std::env::var_os("CODEX_HOME");
+        let home = temp_home("codex-home-env");
+        std::env::set_var("CODEX_HOME", &home);
+
+        let detected = codex_home(None).unwrap();
+        assert_eq!(detected, home);
+
+        if let Some(value) = previous {
+            std::env::set_var("CODEX_HOME", value);
+        } else {
+            std::env::remove_var("CODEX_HOME");
+        }
+        let _ = std::fs::remove_dir_all(detected);
+    }
+
+    #[test]
+    fn codex_home_custom_path_overrides_env() {
+        let _guard = CODEX_HOME_ENV_LOCK.lock().unwrap();
+        let previous = std::env::var_os("CODEX_HOME");
+        let env_home = temp_home("codex-home-env-priority");
+        let custom_home = temp_home("codex-home-custom-priority");
+        std::env::set_var("CODEX_HOME", &env_home);
+
+        let detected = codex_home(Some(custom_home.to_string_lossy().as_ref())).unwrap();
+        assert_eq!(detected, custom_home);
+
+        if let Some(value) = previous {
+            std::env::set_var("CODEX_HOME", value);
+        } else {
+            std::env::remove_var("CODEX_HOME");
+        }
+        let _ = std::fs::remove_dir_all(env_home);
+        let _ = std::fs::remove_dir_all(detected);
     }
 
     #[test]
