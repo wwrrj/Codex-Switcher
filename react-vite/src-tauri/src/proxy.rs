@@ -300,6 +300,12 @@ pub fn update_provider_options(
     get_proxy_state(home)
 }
 
+pub fn clear_proxy_events(home: &Path) -> Result<ProxyState> {
+    let _ = std::fs::remove_file(failovers_file(home));
+    let _ = std::fs::remove_file(requests_file(home));
+    get_proxy_state(home)
+}
+
 pub async fn check_provider_health(home: PathBuf, provider_id: String) -> Result<ProxyState> {
     let accounts = core::list_accounts(&home).unwrap_or_default();
     let provider = providers::merged_providers(&home, &accounts)?
@@ -1659,6 +1665,49 @@ mod tests {
             .routing
             .request_provider_id
             .is_none());
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    #[test]
+    fn clear_proxy_events_removes_request_and_failover_logs() {
+        let home = temp_home("clear-events");
+        append_failover(
+            &home,
+            FailoverEvent {
+                id: "f1".to_string(),
+                time: Utc::now().to_rfc3339(),
+                from_provider: "a".to_string(),
+                to_provider: Some("b".to_string()),
+                reason: "rate limit".to_string(),
+                status_code: Some(429),
+                method: Some("POST".to_string()),
+                path: Some("/v1/responses".to_string()),
+                replay_safe: Some(true),
+            },
+        );
+        append_request(
+            &home,
+            ProxyRequestEvent {
+                id: "r1".to_string(),
+                time: Utc::now().to_rfc3339(),
+                provider: Some("a".to_string()),
+                method: "POST".to_string(),
+                path: "/v1/responses".to_string(),
+                status_code: Some(200),
+                success: true,
+                attempts: 1,
+                duration_ms: 1,
+                replay_safe: true,
+                error: None,
+            },
+        );
+
+        let state = clear_proxy_events(&home).unwrap();
+
+        assert!(state.recent_failovers.is_empty());
+        assert!(state.recent_requests.is_empty());
+        assert!(load_failovers(&home).is_empty());
+        assert!(load_requests(&home).is_empty());
         let _ = std::fs::remove_dir_all(home);
     }
 

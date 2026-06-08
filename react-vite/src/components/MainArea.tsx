@@ -29,6 +29,7 @@ export default function MainArea({ onRename, onDelete, onAddAccount }: Props) {
   const proxyState = useAppStore((s) => s.proxyState)
   const restoreMobileResidency = useAppStore((s) => s.restoreMobileResidency)
   const setRequestProvider = useAppStore((s) => s.setRequestProvider)
+  const clearProxyEvents = useAppStore((s) => s.clearProxyEvents)
 
   const account = accounts.find((a) => a.name === activeAccount) ?? null
   const hasAccount = account !== null
@@ -262,6 +263,14 @@ export default function MainArea({ onRename, onDelete, onAddAccount }: Props) {
               <span className="text-[10px] text-fg-subtle">
                 最多保留 50 条
               </span>
+              {(proxyState.recentFailovers.length > 0 || proxyState.recentRequests.length > 0) && (
+                <button
+                  onClick={() => void clearProxyEvents()}
+                  className="px-2 py-1 rounded-md text-[10px] font-medium text-fg-muted bg-bg-elevated hover:bg-bg-hover"
+                >
+                  清空记录
+                </button>
+              )}
             </div>
             {proxyState.recentFailovers.length > 0 ? (
               <div className="space-y-2">

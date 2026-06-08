@@ -89,6 +89,7 @@ pub fn run() {
             save_provider,
             remove_provider,
             update_provider_options,
+            clear_proxy_events,
             check_provider_health,
             check_all_provider_health,
             install_codex_proxy_config,

@@ -204,6 +204,7 @@ interface AppStore {
   saveProvider: (provider: ProviderConfig) => Promise<void>
   removeProvider: (providerId: string) => Promise<void>
   updateProviderOptions: (providerId: string, options: { enabled?: boolean; includeInFailover?: boolean }) => Promise<void>
+  clearProxyEvents: () => Promise<void>
   checkProviderHealth: (providerId: string) => Promise<void>
   checkAllProviderHealth: () => Promise<void>
   setMobileResidencyAccount: (accountName: string) => Promise<void>
@@ -716,6 +717,15 @@ export const useAppStore = create<AppStore>((set, get) => ({
       set({ proxyState: await api.updateProviderOptions(providerId, options), logs: api.getLogs() })
     } catch (e: unknown) {
       get().addToast('error', e instanceof Error ? e.message : '更新请求出口失败')
+    }
+  },
+
+  clearProxyEvents: async () => {
+    try {
+      set({ proxyState: await api.clearProxyEvents(), logs: api.getLogs() })
+      get().addToast('success', '已清空代理运行记录')
+    } catch (e: unknown) {
+      get().addToast('error', e instanceof Error ? e.message : '清空代理运行记录失败')
     }
   },
 

@@ -146,6 +146,12 @@ export async function updateProviderOptions(
   return state
 }
 
+export async function clearProxyEvents(): Promise<ProxyState> {
+  const state = await invoke<ProxyState>('clear_proxy_events')
+  addLog('info', '已清空代理运行记录')
+  return state
+}
+
 export async function checkProviderHealth(providerId: string): Promise<ProxyState> {
   const state = await invoke<ProxyState>('check_provider_health', { providerId })
   const provider = state.providers.find((provider) => provider.id === providerId)

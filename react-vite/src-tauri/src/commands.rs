@@ -391,6 +391,15 @@ pub async fn update_provider_options(
 }
 
 #[tauri::command]
+pub async fn clear_proxy_events() -> Result<ProxyState, String> {
+    blocking(move || {
+        let actual_home = actual_home()?;
+        crate::proxy::clear_proxy_events(&actual_home).map_err(|e| e.to_string())
+    })
+    .await
+}
+
+#[tauri::command]
 pub async fn check_provider_health(provider_id: String) -> Result<ProxyState, String> {
     let actual_home = blocking(actual_home).await?;
     crate::proxy::check_provider_health(actual_home, provider_id)
