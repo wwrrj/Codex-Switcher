@@ -194,7 +194,7 @@ interface AppStore {
   runSchedulerOnce: () => Promise<void>
   dismissSchedulerInvite: (days?: number) => Promise<void>
   neverShowSchedulerInvite: () => Promise<void>
-  refreshProxyState: () => Promise<void>
+  refreshProxyState: (silent?: boolean) => Promise<void>
   updateProxyConfig: (config: ProxyConfig) => Promise<void>
   startProxy: () => Promise<void>
   stopProxy: () => Promise<void>
@@ -631,11 +631,13 @@ export const useAppStore = create<AppStore>((set, get) => ({
     })
   },
 
-  refreshProxyState: async () => {
+  refreshProxyState: async (silent = false) => {
     try {
       set({ proxyState: await api.getProxyState(), logs: api.getLogs() })
     } catch (e: unknown) {
-      get().addToast('error', e instanceof Error ? e.message : '刷新代理状态失败')
+      if (!silent) {
+        get().addToast('error', e instanceof Error ? e.message : '刷新代理状态失败')
+      }
     }
   },
 

@@ -46,6 +46,8 @@ function MainApp() {
   const refreshUsageIntervalMinutes = useAppStore((s) => s.settings.refreshUsageIntervalMinutes)
   const refreshAllUsage = useAppStore((s) => s.refreshAllUsage)
   const refreshTokenUsage = useAppStore((s) => s.refreshTokenUsage)
+  const refreshProxyState = useAppStore((s) => s.refreshProxyState)
+  const proxyPollingEnabled = useAppStore((s) => s.proxyState.config.enabled || s.proxyState.status === 'running')
   const scheduler = useAppStore((s) => s.scheduler)
   const runSchedulerOnce = useAppStore((s) => s.runSchedulerOnce)
   const addToast = useAppStore((s) => s.addToast)
@@ -102,6 +104,22 @@ function MainApp() {
       document.removeEventListener('visibilitychange', refreshCurrentTokenUsage)
     }
   }, [refreshTokenUsage])
+
+  useEffect(() => {
+    if (!proxyPollingEnabled) return
+    const refreshProxy = () => {
+      if (document.visibilityState === 'visible') void refreshProxyState(true)
+    }
+    const timer = window.setInterval(refreshProxy, 5_000)
+    window.addEventListener('focus', refreshProxy)
+    document.addEventListener('visibilitychange', refreshProxy)
+    refreshProxy()
+    return () => {
+      window.clearInterval(timer)
+      window.removeEventListener('focus', refreshProxy)
+      document.removeEventListener('visibilitychange', refreshProxy)
+    }
+  }, [proxyPollingEnabled, refreshProxyState])
 
   useEffect(() => {
     if (scheduler.shouldShowInvite) {
