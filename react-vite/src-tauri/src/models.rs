@@ -388,6 +388,22 @@ pub struct FailoverEvent {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ProxyRequestEvent {
+    pub id: String,
+    pub time: String,
+    pub provider: Option<String>,
+    pub method: String,
+    pub path: String,
+    pub status_code: Option<u16>,
+    pub success: bool,
+    pub attempts: u8,
+    pub duration_ms: u128,
+    pub replay_safe: bool,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct MobileResidencyState {
     pub enabled: bool,
     pub account_name: Option<String>,
@@ -419,6 +435,7 @@ pub struct ProxyState {
     pub providers: Vec<PublicProviderConfig>,
     pub mobile_residency: MobileResidencyState,
     pub recent_failovers: Vec<FailoverEvent>,
+    pub recent_requests: Vec<ProxyRequestEvent>,
     pub warnings: Vec<String>,
 }
 

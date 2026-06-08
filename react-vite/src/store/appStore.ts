@@ -69,6 +69,7 @@ const defaultProxyState: ProxyState = {
     warnings: [],
   },
   recentFailovers: [],
+  recentRequests: [],
   warnings: [],
 }
 

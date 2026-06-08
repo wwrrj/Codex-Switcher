@@ -225,6 +225,31 @@ export default function MainArea({ onRename, onDelete, onAddAccount }: Props) {
                 value={requestProvider ? `${requestProvider.name} · ${providerHealthText(requestProvider.health.status)}` : requestName}
                 tone={requestProvider?.health.status === 'cooling_down' || requestProvider?.health.status === 'invalid' ? 'warning' : undefined}
               />
+              {proxyState.recentRequests[0] && (
+                <div className="rounded-lg bg-bg-elevated/60 border border-line-subtle px-3 py-2">
+                  <div className="flex items-center gap-2 text-[11px]">
+                    <span
+                      className={cn(
+                        'w-1.5 h-1.5 rounded-full shrink-0',
+                        proxyState.recentRequests[0].success ? 'bg-success' : 'bg-warning'
+                      )}
+                    />
+                    <span className="text-fg truncate min-w-0">
+                      {proxyState.recentRequests[0].method} · {proxyState.recentRequests[0].path}
+                    </span>
+                    <span className="text-fg-subtle ml-auto shrink-0">
+                      {proxyState.recentRequests[0].durationMs}ms
+                    </span>
+                  </div>
+                  <p className="text-[10px] text-fg-subtle mt-1 truncate" title={proxyState.recentRequests[0].error ?? proxyState.recentRequests[0].provider ?? ''}>
+                    {[
+                      proxyState.recentRequests[0].statusCode ?? '无状态码',
+                      proxyState.recentRequests[0].provider ?? '未选择出口',
+                      `${proxyState.recentRequests[0].attempts} 次尝试`,
+                    ].join(' · ')}
+                  </p>
+                </div>
+              )}
             </div>
           </div>
 

@@ -213,6 +213,20 @@ export interface FailoverEvent {
   replaySafe?: boolean;
 }
 
+export interface ProxyRequestEvent {
+  id: string;
+  time: string;
+  provider?: string;
+  method: string;
+  path: string;
+  statusCode?: number;
+  success: boolean;
+  attempts: number;
+  durationMs: number;
+  replaySafe: boolean;
+  error?: string;
+}
+
 export interface MobileResidencyState {
   enabled: boolean;
   accountName?: string;
@@ -240,6 +254,7 @@ export interface ProxyState {
   providers: PublicProviderConfig[];
   mobileResidency: MobileResidencyState;
   recentFailovers: FailoverEvent[];
+  recentRequests: ProxyRequestEvent[];
   warnings: string[];
 }
 

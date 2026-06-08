@@ -16,7 +16,7 @@ use std::fmt;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::sync::oneshot;
 use tokio_tungstenite::connect_async;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
@@ -70,6 +70,10 @@ fn failovers_file(home: &Path) -> PathBuf {
     config_dir(home).join("proxy_failovers.json")
 }
 
+fn requests_file(home: &Path) -> PathBuf {
+    config_dir(home).join("proxy_requests.json")
+}
+
 fn read_json<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T> {
     Ok(serde_json::from_str(&std::fs::read_to_string(path)?)?)
 }
@@ -104,6 +108,18 @@ fn append_failover(home: &Path, event: FailoverEvent) {
     events.insert(0, event);
     events.truncate(50);
     let _ = write_json(&failovers_file(home), &events);
+}
+
+fn load_requests(home: &Path) -> Vec<ProxyRequestEvent> {
+    let path = requests_file(home);
+    read_json(&path).unwrap_or_default()
+}
+
+fn append_request(home: &Path, event: ProxyRequestEvent) {
+    let mut events = load_requests(home);
+    events.insert(0, event);
+    events.truncate(100);
+    let _ = write_json(&requests_file(home), &events);
 }
 
 pub fn get_proxy_state(home: &Path) -> Result<ProxyState> {
@@ -169,6 +185,7 @@ pub fn get_proxy_state(home: &Path) -> Result<ProxyState> {
         providers: public_providers,
         mobile_residency,
         recent_failovers: load_failovers(home),
+        recent_requests: load_requests(home),
         warnings,
     })
 }
@@ -524,6 +541,7 @@ fn tungstenite_to_axum(message: TungsteniteMessage) -> AxumWsMessage {
 }
 
 async fn proxy_request(state: ProxyAppState, req: Request<Body>) -> Result<Response<Body>> {
+    let started = Instant::now();
     let (parts, body) = req.into_parts();
     let method = parts.method;
     let uri = parts.uri;
@@ -553,6 +571,7 @@ async fn proxy_request(state: ProxyAppState, req: Request<Body>) -> Result<Respo
 
     let mut attempted = Vec::new();
     let mut last_error: Option<anyhow::Error> = None;
+    let mut last_provider: Option<String> = None;
     let config = load_proxy_config(&state.home)?;
     let retry_allowed = config.routing.automatic_failover && is_replay_safe_request(&method, &path);
     let max_attempts = if retry_allowed {
@@ -569,6 +588,7 @@ async fn proxy_request(state: ProxyAppState, req: Request<Body>) -> Result<Respo
             break;
         };
         let provider = decision.provider;
+        last_provider = Some(provider.name.clone());
         attempted.push(provider.id.clone());
 
         match forward_once(
@@ -583,6 +603,19 @@ async fn proxy_request(state: ProxyAppState, req: Request<Body>) -> Result<Respo
         .await
         {
             Ok(response) => {
+                let status_code = response.status().as_u16();
+                record_request(
+                    &state.home,
+                    last_provider.clone(),
+                    &method,
+                    &path,
+                    Some(status_code),
+                    true,
+                    attempted.len() as u8,
+                    started.elapsed().as_millis(),
+                    retry_allowed,
+                    None,
+                );
                 let _ = providers::mark_provider_used(&state.home, &provider.id);
                 return Ok(response);
             }
@@ -626,7 +659,24 @@ async fn proxy_request(state: ProxyAppState, req: Request<Body>) -> Result<Respo
         }
     }
 
-    Err(last_error.unwrap_or_else(|| anyhow::anyhow!("没有可用请求出口")))
+    let error = last_error.unwrap_or_else(|| anyhow::anyhow!("没有可用请求出口"));
+    let (error_message, status_code) = error
+        .downcast_ref::<UpstreamFailure>()
+        .map(|failure| (sanitize_message(&failure.reason), failure.status_code))
+        .unwrap_or_else(|| (sanitize_message(&error.to_string()), None));
+    record_request(
+        &state.home,
+        last_provider.clone(),
+        &method,
+        &path,
+        status_code,
+        false,
+        attempted.len() as u8,
+        started.elapsed().as_millis(),
+        retry_allowed,
+        Some(error_message),
+    );
+    Err(error)
 }
 
 fn is_replay_safe_request(method: &Method, path: &str) -> bool {
@@ -668,6 +718,36 @@ fn record_failover(
             method: Some(method.as_str().to_string()),
             path: Some(path.to_string()),
             replay_safe: Some(replay_safe),
+        },
+    );
+}
+
+fn record_request(
+    home: &Path,
+    provider: Option<String>,
+    method: &Method,
+    path: &str,
+    status_code: Option<u16>,
+    success: bool,
+    attempts: u8,
+    duration_ms: u128,
+    replay_safe: bool,
+    error: Option<String>,
+) {
+    append_request(
+        home,
+        ProxyRequestEvent {
+            id: uuid::Uuid::new_v4().to_string(),
+            time: Utc::now().to_rfc3339(),
+            provider,
+            method: method.as_str().to_string(),
+            path: path.to_string(),
+            status_code,
+            success,
+            attempts,
+            duration_ms,
+            replay_safe,
+            error: error.map(|msg| sanitize_message(&msg)),
         },
     );
 }
@@ -1225,6 +1305,13 @@ mod tests {
         let body: serde_json::Value = response.json().await.unwrap();
         assert_eq!(body["object"], "response");
         assert_eq!(body["output"][0]["content"][0]["text"], "ok");
+        let requests = load_requests(&home);
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].provider.as_deref(), Some("Mock"));
+        assert_eq!(requests[0].method, "POST");
+        assert_eq!(requests[0].path, "/v1/responses");
+        assert_eq!(requests[0].status_code, Some(200));
+        assert!(requests[0].success);
         stop_proxy(&home).unwrap();
         let _ = std::fs::remove_dir_all(home);
     }
