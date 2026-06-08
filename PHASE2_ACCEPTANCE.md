@@ -10,9 +10,9 @@ Status legend:
 
 ## Current Completion
 
-Estimated completion: `88%-90%`.
+Estimated completion: `92%-94%`.
 
-The remaining gap is mainly verification depth, not core implementation. The proxy, provider routing, failover, protocol conversion, mobile residency, and persistent operation logs are implemented. The highest-risk remaining work is a full real-app end-to-end pass and final Tauri package build.
+The remaining gap is mainly one real proxy end-to-end pass, not core implementation. The proxy, provider routing, failover, protocol conversion, mobile residency, persistent operation logs, final automated builds, Tauri packaging, and release executable startup have been verified.
 
 ## Core Proxy
 
@@ -26,7 +26,7 @@ The remaining gap is mainly verification depth, not core implementation. The pro
 | SSE forwarding and conversion | Done | `response_from_reqwest`, `ChatCompletionSseTransformer`, tests `proxy_buffers_split_chat_sse_chunks`, `proxy_records_broken_sse_stream_after_headers` |
 | WebSocket forwarding | Done | `proxy_websocket`, test `proxy_bridges_websocket_messages` |
 | Synthetic `/v1/models` response | Done | `synthetic_models_response`, test `proxy_returns_synthetic_models_without_configured_provider` |
-| Real app startup verification | Needs E2E | Not yet re-run after the latest proxy changes |
+| Real app startup verification | Done | Release executable `codex-switcher.exe` started and was stopped successfully on 2026-06-08 |
 
 ## Providers
 
@@ -106,30 +106,24 @@ The remaining gap is mainly verification depth, not core implementation. The pro
 | Provider management UI | Done | `SettingsDrawer` provider form and list |
 | Dashboard proxy state card | Done | `MainArea` proxy / failover / residency cards |
 | Tray proxy state summary | Done | `TrayMenu` |
-| Existing account switching still available when proxy is disabled | Needs E2E | Core account switch logic remains, but latest proxy changes need a manual regression pass |
+| Existing account switching still available when proxy is disabled | Needs E2E | Core account switch logic remains, but latest proxy changes still need a manual regression pass |
 
 ## Required Verification Gates
 
 | Gate | Status | Last Known Result |
 | --- | --- | --- |
-| `cargo test` | Done | 73 tests passed after commit `4404770` |
-| `cargo build` | Done | Passed after commit `4404770` |
-| `npm run build` | Done | Passed after commit `4404770` |
-| `git diff --check` | Done | Passed after commit `4404770` |
-| `npm exec tauri -- build` | Needs E2E | Not yet re-run after latest commits |
-| Real app startup verification | Needs E2E | Not yet re-run after latest commits |
+| `cargo test` | Done | 73 tests passed on 2026-06-08 after commit `6e8954e` |
+| `cargo build` | Done | Passed on 2026-06-08 after commit `6e8954e` |
+| `npm run build` | Done | Passed on 2026-06-08 after commit `6e8954e` |
+| `git diff --check` | Done | Passed on 2026-06-08 after commit `6e8954e` |
+| `npm exec tauri -- build` | Done | Passed on 2026-06-08; produced MSI and NSIS bundles |
+| Real app startup verification | Done | Release executable started as process `codex-switcher` and was stopped successfully |
 | Real proxy request through app / CLI | Needs E2E | Not yet re-run after latest commits |
 
 ## Remaining Before Claiming Phase 2 Complete
 
-1. Run final full verification:
-   - `cargo test`
-   - `cargo build`
-   - `npm run build`
-   - `npm exec tauri -- build`
-2. Launch the built app once and verify startup does not regress.
-3. Start proxy from the UI or command path and verify `chatgpt_base_url` install / restore on a disposable Codex home.
-4. Send at least one mock or controlled request through the local proxy after app startup.
-5. Re-check logs for absence of token, auth JSON, request body, or provider secrets.
+1. Start proxy from the UI or command path and verify `chatgpt_base_url` install / restore on a disposable Codex home.
+2. Send at least one mock or controlled request through the local proxy after app startup.
+3. Re-check logs for absence of token, auth JSON, request body, or provider secrets.
 
 Only after these gates pass should the phase be marked complete.
