@@ -319,12 +319,10 @@ pub async fn get_proxy_state() -> Result<ProxyState, String> {
 
 #[tauri::command]
 pub async fn update_proxy_config(config: ProxyConfig) -> Result<ProxyState, String> {
-    blocking(move || {
-        let actual_home = actual_home()?;
-        crate::proxy::save_proxy_config(&actual_home, &config).map_err(|e| e.to_string())?;
-        crate::proxy::get_proxy_state(&actual_home).map_err(|e| e.to_string())
-    })
-    .await
+    let actual_home = blocking(actual_home).await?;
+    crate::proxy::update_proxy_config(actual_home, config)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]

@@ -367,7 +367,7 @@ export default function SettingsDrawer({ open, onClose }: Props) {
                 </div>
                 <div className="flex items-center justify-between gap-2">
                   <p className="text-[10px] text-fg-subtle">
-                    默认只监听本机；运行中修改地址或端口后需要重启代理。
+                    默认只监听本机；运行中修改地址或端口会自动重启代理。
                   </p>
                   <button
                     onClick={() => void handleSaveProxyListenAddress()}

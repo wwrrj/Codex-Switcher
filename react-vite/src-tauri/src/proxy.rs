@@ -86,6 +86,18 @@ fn write_json<T: serde::Serialize>(path: &Path, value: &T) -> Result<()> {
     Ok(())
 }
 
+fn listen_url_for_config(config: &ProxyConfig) -> String {
+    format!("http://{}:{}", config.host, config.port)
+}
+
+fn shutdown_runtime_only() {
+    if let Some(mut runtime) = RUNTIME.lock().unwrap().take() {
+        if let Some(shutdown) = runtime.shutdown.take() {
+            let _ = shutdown.send(());
+        }
+    }
+}
+
 pub fn load_proxy_config(home: &Path) -> Result<ProxyConfig> {
     let path = proxy_config_file(home);
     if !path.exists() {
@@ -207,14 +219,21 @@ pub fn get_proxy_state(home: &Path) -> Result<ProxyState> {
 
 pub async fn start_proxy(home: PathBuf) -> Result<ProxyState> {
     let mut config = load_proxy_config(&home)?;
+    let desired_listen_url = listen_url_for_config(&config);
 
-    if RUNTIME.lock().unwrap().is_some() {
+    if RUNTIME
+        .lock()
+        .unwrap()
+        .as_ref()
+        .is_some_and(|runtime| runtime.listen_url == desired_listen_url)
+    {
         config.enabled = true;
         codex_config::install_proxy_config(&home, &config.host, config.port)?;
         config.install_codex_config = true;
         save_proxy_config(&home, &config)?;
         return get_proxy_state(&home);
     }
+    shutdown_runtime_only();
 
     let addr: SocketAddr = format!("{}:{}", config.host, config.port)
         .parse()
@@ -244,11 +263,40 @@ pub async fn start_proxy(home: PathBuf) -> Result<ProxyState> {
         }
     });
 
-    let listen_url = format!("http://{}:{}", config.host, config.port);
     *RUNTIME.lock().unwrap() = Some(ProxyRuntime {
-        listen_url,
+        listen_url: desired_listen_url,
         shutdown: Some(tx),
     });
+    get_proxy_state(&home)
+}
+
+pub async fn update_proxy_config(home: PathBuf, mut config: ProxyConfig) -> Result<ProxyState> {
+    validate_proxy_config(&config)?;
+    let runtime_url = RUNTIME
+        .lock()
+        .unwrap()
+        .as_ref()
+        .map(|runtime| runtime.listen_url.clone());
+    let desired_listen_url = listen_url_for_config(&config);
+
+    if !config.enabled {
+        if runtime_url.is_some() {
+            shutdown_runtime_only();
+            let _ = codex_config::restore_proxy_config(&home)?;
+        }
+        config.install_codex_config = false;
+        save_proxy_config(&home, &config)?;
+        return get_proxy_state(&home);
+    }
+
+    save_proxy_config(&home, &config)?;
+    if runtime_url.as_deref() != Some(desired_listen_url.as_str()) {
+        shutdown_runtime_only();
+        return start_proxy(home).await;
+    }
+    if config.install_codex_config {
+        codex_config::install_proxy_config(&home, &config.host, config.port)?;
+    }
     get_proxy_state(&home)
 }
 
@@ -270,11 +318,7 @@ pub async fn restore_proxy_on_startup(home: PathBuf) -> Result<ProxyState> {
 }
 
 pub fn stop_proxy(home: &Path) -> Result<ProxyState> {
-    if let Some(mut runtime) = RUNTIME.lock().unwrap().take() {
-        if let Some(shutdown) = runtime.shutdown.take() {
-            let _ = shutdown.send(());
-        }
-    }
+    shutdown_runtime_only();
     let mut config = load_proxy_config(home)?;
     config.enabled = false;
     let _ = codex_config::restore_proxy_config(home)?;
@@ -1455,6 +1499,56 @@ mod tests {
         assert!(!stopped.config.install_codex_config);
         let restored = std::fs::read_to_string(home.join("config.toml")).unwrap();
         assert_eq!(restored, "model = \"gpt-4.1\"\n");
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    #[tokio::test]
+    async fn update_proxy_config_restarts_running_proxy_on_listen_address_change() {
+        let _guard = TEST_PROXY_MUTEX.lock().await;
+        let home = temp_home("restart-config-change");
+        std::fs::write(home.join("config.toml"), "model = \"gpt-4.1\"\n").unwrap();
+        let first_port = available_port().await;
+        let second_port = available_port().await;
+        save_proxy_config(
+            &home,
+            &ProxyConfig {
+                enabled: true,
+                port: first_port,
+                ..ProxyConfig::default()
+            },
+        )
+        .unwrap();
+
+        let started = start_proxy(home.clone()).await.unwrap();
+        assert_eq!(
+            started.listen_url.as_deref(),
+            Some(format!("http://127.0.0.1:{first_port}").as_str())
+        );
+
+        let updated = update_proxy_config(
+            home.clone(),
+            ProxyConfig {
+                enabled: true,
+                port: second_port,
+                install_codex_config: true,
+                ..started.config
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            updated.listen_url.as_deref(),
+            Some(format!("http://127.0.0.1:{second_port}").as_str())
+        );
+        assert_eq!(updated.config.port, second_port);
+        assert!(updated.codex_config.installed);
+        assert_eq!(
+            updated.codex_config.current_base_url.as_deref(),
+            Some(format!("http://127.0.0.1:{second_port}/backend-api").as_str())
+        );
+
+        stop_proxy(&home).unwrap();
         let _ = std::fs::remove_dir_all(home);
     }
 
