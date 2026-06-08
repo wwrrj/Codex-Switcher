@@ -693,14 +693,29 @@ async fn proxy_request(state: ProxyAppState, req: Request<Body>) -> Result<Respo
         let providers = providers::merged_providers(&state.home, &accounts)?;
         let provider = routing::choose_provider(&providers, &config.routing, &[])
             .map(|decision| decision.provider)
-            .or_else(|| providers.into_iter().next())
-            .ok_or_else(|| anyhow::anyhow!("没有可用请求出口"))?;
-        let models = provider
-            .model_map
+            .or_else(|| providers.into_iter().next());
+        let provider_name = provider
             .as_ref()
+            .map(|provider| provider.name.clone())
+            .unwrap_or_else(|| "Codex Switcher".to_string());
+        let models = provider
+            .as_ref()
+            .and_then(|provider| provider.model_map.as_ref())
             .map(|map| map.values().cloned().collect::<Vec<_>>())
-            .unwrap_or_else(|| vec!["gpt-4.1".to_string(), "gpt-4.1-mini".to_string()]);
-        let value = transforms::synthetic_models_response(&provider.name, &models);
+            .unwrap_or_else(default_synthetic_models);
+        let value = transforms::synthetic_models_response(&provider_name, &models);
+        record_request(
+            &state.home,
+            provider.as_ref().map(|provider| provider.name.clone()),
+            &method,
+            &path,
+            Some(200),
+            true,
+            1,
+            started.elapsed().as_millis(),
+            true,
+            None,
+        );
         return Ok(json_response(StatusCode::OK, value));
     }
 
@@ -829,6 +844,10 @@ fn is_replay_safe_request(method: &Method, path: &str) -> bool {
         || normalized.ends_with("/responses")
         || normalized.ends_with("/v1/chat/completions")
         || normalized.ends_with("/chat/completions")
+}
+
+fn default_synthetic_models() -> Vec<String> {
+    vec!["gpt-4.1".to_string(), "gpt-4.1-mini".to_string()]
 }
 
 fn record_failover(
@@ -1541,6 +1560,43 @@ mod tests {
         assert_eq!(requests[0].provider.as_deref(), Some("Mock"));
         assert_eq!(requests[0].method, "POST");
         assert_eq!(requests[0].path, "/v1/responses");
+        assert_eq!(requests[0].status_code, Some(200));
+        assert!(requests[0].success);
+        stop_proxy(&home).unwrap();
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    #[tokio::test]
+    async fn proxy_returns_synthetic_models_without_configured_provider() {
+        let _guard = TEST_PROXY_MUTEX.lock().await;
+        let home = temp_home("models-no-provider");
+        let port = available_port().await;
+        save_proxy_config(
+            &home,
+            &ProxyConfig {
+                enabled: true,
+                port,
+                ..ProxyConfig::default()
+            },
+        )
+        .unwrap();
+
+        let state = start_proxy(home.clone()).await.unwrap();
+        let response = reqwest::Client::new()
+            .get(format!("{}/v1/models", state.listen_url.unwrap()))
+            .send()
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), reqwest::StatusCode::OK);
+        let body: serde_json::Value = response.json().await.unwrap();
+        assert_eq!(body["object"], "list");
+        assert_eq!(body["data"][0]["id"], "gpt-4.1");
+        assert_eq!(body["data"][0]["owned_by"], "Codex Switcher");
+        let requests = load_requests(&home);
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].method, "GET");
+        assert_eq!(requests[0].path, "/v1/models");
         assert_eq!(requests[0].status_code, Some(200));
         assert!(requests[0].success);
         stop_proxy(&home).unwrap();
