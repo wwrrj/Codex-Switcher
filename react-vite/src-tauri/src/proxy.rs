@@ -174,7 +174,15 @@ fn append_request(home: &Path, event: ProxyRequestEvent) {
 }
 
 pub fn get_proxy_state(home: &Path) -> Result<ProxyState> {
-    let config = load_proxy_config(home)?;
+    let mut config = load_proxy_config(home)?;
+    let mut warnings = Vec::new();
+    if let Some(provider_id) = config.routing.request_provider_id.clone() {
+        if validate_request_provider(home, &provider_id).is_err() {
+            config.routing.request_provider_id = None;
+            save_proxy_config(home, &config)?;
+            warnings.push("当前请求出口不可用，已恢复默认路由".to_string());
+        }
+    }
     let accounts = core::list_accounts(home).unwrap_or_default();
     let providers = providers::merged_providers(home, &accounts)?;
     let public_providers = providers
@@ -213,7 +221,6 @@ pub fn get_proxy_state(home: &Path) -> Result<ProxyState> {
     } else {
         ProxyRuntimeStatus::Stopped
     };
-    let mut warnings = Vec::new();
     if config.enabled && !runtime.as_ref().is_some_and(|(_, running)| *running) {
         warnings.push("代理已启用但当前未运行".to_string());
     }
@@ -1914,6 +1921,36 @@ mod tests {
         let error = set_request_provider(&home, Some("account:missing@example.com".to_string()))
             .unwrap_err();
         assert!(error.to_string().contains("请求出口不存在"));
+        assert!(load_proxy_config(&home)
+            .unwrap()
+            .routing
+            .request_provider_id
+            .is_none());
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    #[test]
+    fn get_proxy_state_clears_stale_request_provider() {
+        let home = temp_home("stale-request-provider");
+        save_proxy_config(
+            &home,
+            &ProxyConfig {
+                routing: RoutingPolicy {
+                    request_provider_id: Some("provider:missing".to_string()),
+                    ..RoutingPolicy::default()
+                },
+                ..ProxyConfig::default()
+            },
+        )
+        .unwrap();
+
+        let state = get_proxy_state(&home).unwrap();
+
+        assert!(state.config.routing.request_provider_id.is_none());
+        assert!(state
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("已恢复默认路由")));
         assert!(load_proxy_config(&home)
             .unwrap()
             .routing
