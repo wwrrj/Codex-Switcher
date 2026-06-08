@@ -133,6 +133,19 @@ export async function removeProvider(providerId: string): Promise<ProxyState> {
   return state
 }
 
+export async function updateProviderOptions(
+  providerId: string,
+  options: { enabled?: boolean; includeInFailover?: boolean },
+): Promise<ProxyState> {
+  const state = await invoke<ProxyState>('update_provider_options', {
+    providerId,
+    enabled: options.enabled ?? null,
+    includeInFailover: options.includeInFailover ?? null,
+  })
+  addLog('info', `已更新请求出口：${state.providers.find((provider) => provider.id === providerId)?.name ?? providerId}`)
+  return state
+}
+
 export async function setMobileResidencyAccount(accountName: string): Promise<ProxyState> {
   const state = await invoke<ProxyState>('set_mobile_residency_account', { accountName })
   addLog('success', `已设置移动端驻留：${accountName}`)

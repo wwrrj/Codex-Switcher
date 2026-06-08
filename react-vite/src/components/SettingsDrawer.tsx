@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import { X, RotateCcw } from 'lucide-react'
 import { useAppStore } from '@/store/appStore'
 import { cn } from '@/lib/utils'
-import type { AppSettings, ProviderKind } from '@/lib/types'
+import type { AppSettings, ProviderKind, PublicProviderConfig } from '@/lib/types'
 import SmartQuotaSchedulerPanel from './SmartQuotaSchedulerPanel'
 
 const defaultSettings: AppSettings = {
@@ -16,6 +16,24 @@ const defaultSettings: AppSettings = {
   enableUsageNotifications: true,
   usageNotificationThreshold: 80,
   theme: 'dark',
+}
+
+const providerKindLabel: Record<ProviderKind, string> = {
+  chat_gpt_oauth: 'ChatGPT OAuth',
+  open_ai_api_key: 'OpenAI API Key',
+  open_ai_compatible: 'OpenAI Relay',
+  glm: 'GLM Coding Plan',
+  mimo: 'MiMo Token Plan',
+  deep_seek: 'DeepSeek',
+  custom_chat_completions: 'Chat Completions',
+}
+
+function providerHealthLabel(provider: PublicProviderConfig): string {
+  if (provider.health.status === 'cooling_down') return '冷却中'
+  if (provider.health.status === 'healthy') return '正常'
+  if (provider.health.status === 'disabled') return '已停用'
+  if (provider.health.status === 'invalid') return '异常'
+  return provider.enabled ? '待验证' : '已停用'
 }
 
 interface Props {
@@ -34,6 +52,7 @@ export default function SettingsDrawer({ open, onClose }: Props) {
   const installProxyConfig = useAppStore((s) => s.installProxyConfig)
   const restoreProxyConfig = useAppStore((s) => s.restoreProxyConfig)
   const setRequestProvider = useAppStore((s) => s.setRequestProvider)
+  const updateProviderOptions = useAppStore((s) => s.updateProviderOptions)
   const setMobileResidencyAccount = useAppStore((s) => s.setMobileResidencyAccount)
   const enableMobileResidency = useAppStore((s) => s.enableMobileResidency)
   const disableMobileResidency = useAppStore((s) => s.disableMobileResidency)
@@ -221,7 +240,7 @@ export default function SettingsDrawer({ open, onClose }: Props) {
                   <option value="">默认当前账号</option>
                   {proxyState.providers.map((provider) => (
                     <option key={provider.id} value={provider.id}>
-                      {provider.name} · {provider.kind}
+                      {provider.name} · {providerKindLabel[provider.kind]}
                     </option>
                   ))}
                 </select>
@@ -271,6 +290,7 @@ export default function SettingsDrawer({ open, onClose }: Props) {
                   className="px-2.5 py-1.5 rounded-md text-xs bg-bg-elevated border border-line text-fg focus:border-primary focus:outline-none"
                 >
                   <option value="open_ai_compatible">OpenAI Relay</option>
+                  <option value="open_ai_api_key">OpenAI API Key</option>
                   <option value="glm">GLM Coding Plan</option>
                   <option value="mimo">MiMo Token Plan</option>
                   <option value="deep_seek">DeepSeek</option>
@@ -303,18 +323,71 @@ export default function SettingsDrawer({ open, onClose }: Props) {
                 添加后端
               </button>
               {proxyState.providers.filter((provider) => provider.kind !== 'chat_gpt_oauth').length > 0 && (
-                <div className="space-y-1.5 pt-1">
+                <div className="space-y-2 pt-1">
                   {proxyState.providers.filter((provider) => provider.kind !== 'chat_gpt_oauth').map((provider) => (
-                    <div key={provider.id} className="flex items-center gap-2 rounded-md bg-bg-elevated/60 border border-line-subtle px-2.5 py-2">
-                      <span className="text-xs text-fg truncate">{provider.name}</span>
-                      <span className="text-[10px] text-fg-subtle">{provider.kind}</span>
-                      <span className="ml-auto text-[10px] text-fg-subtle">{provider.hasSecret ? '已保存密钥' : '无密钥'}</span>
-                      <button
-                        onClick={() => void useAppStore.getState().removeProvider(provider.id)}
-                        className="text-[10px] text-danger hover:bg-danger-muted rounded px-1.5 py-0.5"
-                      >
-                        删除
-                      </button>
+                    <div key={provider.id} className="rounded-md bg-bg-elevated/60 border border-line-subtle px-2.5 py-2 space-y-2">
+                      <div className="flex items-start gap-2">
+                        <div className="min-w-0">
+                          <p className="text-xs font-medium text-fg truncate">{provider.name}</p>
+                          <p className="text-[10px] text-fg-subtle truncate">
+                            {providerKindLabel[provider.kind]} · {provider.hasSecret ? '已保存密钥' : '无密钥'}
+                          </p>
+                        </div>
+                        <span
+                          className={cn(
+                            'ml-auto shrink-0 rounded-full px-2 py-0.5 text-[10px]',
+                            provider.enabled ? 'text-success bg-success-muted' : 'text-fg-subtle bg-bg'
+                          )}
+                        >
+                          {providerHealthLabel(provider)}
+                        </span>
+                      </div>
+                      {provider.health.lastError && (
+                        <p className="rounded bg-bg px-2 py-1 text-[10px] text-warning line-clamp-2">
+                          {provider.health.lastError}
+                        </p>
+                      )}
+                      <div className="flex flex-wrap items-center gap-2">
+                        <button
+                          onClick={() => void updateProviderOptions(provider.id, { enabled: !provider.enabled })}
+                          className={cn(
+                            'px-2.5 py-1 rounded-md text-[10px] font-medium transition-colors',
+                            provider.enabled
+                              ? 'bg-success-muted text-success hover:bg-success/15'
+                              : 'bg-bg text-fg-muted hover:bg-bg-hover'
+                          )}
+                        >
+                          {provider.enabled ? '已启用' : '已停用'}
+                        </button>
+                        <button
+                          onClick={() => void updateProviderOptions(provider.id, { includeInFailover: !provider.includeInFailover })}
+                          className={cn(
+                            'px-2.5 py-1 rounded-md text-[10px] font-medium transition-colors',
+                            provider.includeInFailover
+                              ? 'bg-primary-muted text-primary hover:bg-primary/15'
+                              : 'bg-bg text-fg-muted hover:bg-bg-hover'
+                          )}
+                        >
+                          {provider.includeInFailover ? '参与自动切换' : '不参与切换'}
+                        </button>
+                        <button
+                          onClick={() => void setRequestProvider(provider.id)}
+                          className={cn(
+                            'px-2.5 py-1 rounded-md text-[10px] font-medium transition-colors',
+                            proxyState.config.routing.requestProviderId === provider.id
+                              ? 'bg-primary text-white'
+                              : 'bg-bg text-fg-muted hover:bg-bg-hover'
+                          )}
+                        >
+                          {proxyState.config.routing.requestProviderId === provider.id ? '当前出口' : '设为出口'}
+                        </button>
+                        <button
+                          onClick={() => void useAppStore.getState().removeProvider(provider.id)}
+                          className="ml-auto px-2.5 py-1 rounded-md text-[10px] font-medium text-danger hover:bg-danger-muted"
+                        >
+                          删除
+                        </button>
+                      </div>
                     </div>
                   ))}
                 </div>

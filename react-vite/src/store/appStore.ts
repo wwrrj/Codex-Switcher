@@ -196,6 +196,7 @@ interface AppStore {
   setRequestProvider: (providerId?: string) => Promise<void>
   saveProvider: (provider: ProviderConfig) => Promise<void>
   removeProvider: (providerId: string) => Promise<void>
+  updateProviderOptions: (providerId: string, options: { enabled?: boolean; includeInFailover?: boolean }) => Promise<void>
   setMobileResidencyAccount: (accountName: string) => Promise<void>
   enableMobileResidency: () => Promise<void>
   disableMobileResidency: () => Promise<void>
@@ -696,6 +697,14 @@ export const useAppStore = create<AppStore>((set, get) => ({
       get().addToast('success', '已删除请求出口')
     } catch (e: unknown) {
       get().addToast('error', e instanceof Error ? e.message : '删除请求出口失败')
+    }
+  },
+
+  updateProviderOptions: async (providerId, options) => {
+    try {
+      set({ proxyState: await api.updateProviderOptions(providerId, options), logs: api.getLogs() })
+    } catch (e: unknown) {
+      get().addToast('error', e instanceof Error ? e.message : '更新请求出口失败')
     }
   },
 

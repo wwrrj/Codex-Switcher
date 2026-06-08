@@ -219,6 +219,21 @@ pub fn save_provider(home: &Path, provider: ProviderConfig) -> Result<ProxyState
 
 pub fn remove_provider(home: &Path, provider_id: &str) -> Result<ProxyState> {
     providers::remove_provider(home, provider_id)?;
+    let mut config = load_proxy_config(home)?;
+    if config.routing.request_provider_id.as_deref() == Some(provider_id) {
+        config.routing.request_provider_id = None;
+        save_proxy_config(home, &config)?;
+    }
+    get_proxy_state(home)
+}
+
+pub fn update_provider_options(
+    home: &Path,
+    provider_id: &str,
+    enabled: Option<bool>,
+    include_in_failover: Option<bool>,
+) -> Result<ProxyState> {
+    providers::update_provider_options(home, provider_id, enabled, include_in_failover)?;
     get_proxy_state(home)
 }
 
@@ -334,9 +349,7 @@ async fn proxy_websocket(
 
     let mut request = url.into_client_request()?;
     if let Some(auth) = provider_auth_header(&state.home, &provider)? {
-        request
-            .headers_mut()
-            .insert("authorization", auth.parse()?);
+        request.headers_mut().insert("authorization", auth.parse()?);
     }
     let (upstream_socket, _) = connect_async(request).await?;
     let (mut upstream_write, mut upstream_read) = upstream_socket.split();
@@ -908,6 +921,46 @@ mod tests {
         assert!(response.text().await.unwrap().contains("ok"));
         assert!(!load_failovers(&home).is_empty());
         stop_proxy(&home).unwrap();
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    #[test]
+    fn removing_request_provider_clears_route() {
+        let home = temp_home("remove-provider");
+        save_proxy_config(
+            &home,
+            &ProxyConfig {
+                routing: RoutingPolicy {
+                    request_provider_id: Some("provider:delete".to_string()),
+                    ..RoutingPolicy::default()
+                },
+                ..ProxyConfig::default()
+            },
+        )
+        .unwrap();
+        providers::save_provider(
+            &home,
+            ProviderConfig {
+                id: "provider:delete".to_string(),
+                name: "Delete".to_string(),
+                kind: ProviderKind::OpenAiCompatible,
+                enabled: true,
+                base_url: "https://relay.example/v1".to_string(),
+                account_name: None,
+                api_key: Some("sk-test".to_string()),
+                model_map: None,
+                include_in_failover: true,
+                health: ProviderHealth::default(),
+            },
+        )
+        .unwrap();
+
+        remove_provider(&home, "provider:delete").unwrap();
+        assert!(load_proxy_config(&home)
+            .unwrap()
+            .routing
+            .request_provider_id
+            .is_none());
         let _ = std::fs::remove_dir_all(home);
     }
 

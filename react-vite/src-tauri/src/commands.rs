@@ -372,6 +372,25 @@ pub async fn remove_provider(provider_id: String) -> Result<ProxyState, String> 
 }
 
 #[tauri::command]
+pub async fn update_provider_options(
+    provider_id: String,
+    enabled: Option<bool>,
+    include_in_failover: Option<bool>,
+) -> Result<ProxyState, String> {
+    blocking(move || {
+        let actual_home = actual_home()?;
+        crate::proxy::update_provider_options(
+            &actual_home,
+            &provider_id,
+            enabled,
+            include_in_failover,
+        )
+        .map_err(|e| e.to_string())
+    })
+    .await
+}
+
+#[tauri::command]
 pub async fn install_codex_proxy_config() -> Result<ProxyState, String> {
     blocking(move || {
         let actual_home = actual_home()?;

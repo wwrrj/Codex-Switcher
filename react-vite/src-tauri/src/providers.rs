@@ -149,6 +149,42 @@ pub fn remove_provider(home: &Path, provider_id: &str) -> Result<()> {
     save_provider_configs(home, &providers)
 }
 
+pub fn update_provider_options(
+    home: &Path,
+    provider_id: &str,
+    enabled: Option<bool>,
+    include_in_failover: Option<bool>,
+) -> Result<()> {
+    let mut providers = load_provider_configs(home)?;
+    let mut found = false;
+    for provider in &mut providers {
+        if provider.id == provider_id {
+            found = true;
+            if let Some(enabled) = enabled {
+                provider.enabled = enabled;
+                if !enabled {
+                    provider.health.status = ProviderHealthStatus::Disabled;
+                } else if provider.health.status == ProviderHealthStatus::Disabled {
+                    provider.health.status = ProviderHealthStatus::Unknown;
+                }
+            }
+            if let Some(include_in_failover) = include_in_failover {
+                provider.include_in_failover = include_in_failover;
+            }
+            provider.health.last_error = provider
+                .health
+                .last_error
+                .take()
+                .map(|msg| mask_secret(&msg));
+            break;
+        }
+    }
+    if !found {
+        return Err(anyhow::anyhow!("请求出口不存在：{}", provider_id));
+    }
+    save_provider_configs(home, &providers)
+}
+
 pub fn mark_provider_failure(
     home: &Path,
     provider_id: &str,
@@ -199,5 +235,30 @@ mod tests {
         };
         let public = public_provider(&provider);
         assert!(public.has_secret);
+    }
+
+    #[test]
+    fn update_provider_options_preserves_secret() {
+        let home =
+            std::env::temp_dir().join(format!("codex-provider-options-{}", uuid::Uuid::new_v4()));
+        let provider = ProviderConfig {
+            id: "provider:test".to_string(),
+            name: "Relay".to_string(),
+            kind: ProviderKind::OpenAiCompatible,
+            enabled: true,
+            base_url: "https://relay.example/v1".to_string(),
+            account_name: None,
+            api_key: Some("sk-secret".to_string()),
+            model_map: None,
+            include_in_failover: true,
+            health: ProviderHealth::default(),
+        };
+        save_provider(&home, provider).unwrap();
+        update_provider_options(&home, "provider:test", Some(false), Some(false)).unwrap();
+        let providers = load_provider_configs(&home).unwrap();
+        assert_eq!(providers[0].api_key.as_deref(), Some("sk-secret"));
+        assert!(!providers[0].enabled);
+        assert!(!providers[0].include_in_failover);
+        let _ = std::fs::remove_dir_all(home);
     }
 }
