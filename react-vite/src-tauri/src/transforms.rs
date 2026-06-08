@@ -279,6 +279,21 @@ pub fn chat_completion_response_to_responses(value: Value) -> Value {
         .and_then(|v| v.first())
     {
         if let Some(message) = choice.get("message") {
+            if let Some(reasoning) = message
+                .get("reasoning_content")
+                .or_else(|| message.get("reasoning"))
+                .and_then(Value::as_str)
+                .filter(|text| !text.is_empty())
+            {
+                output.push(json!({
+                    "type": "reasoning",
+                    "id": format!("rs_{id}"),
+                    "summary": [{
+                        "type": "summary_text",
+                        "text": reasoning
+                    }]
+                }));
+            }
             if let Some(tool_calls) = message.get("tool_calls").and_then(Value::as_array) {
                 for tool in tool_calls {
                     let call_id = tool
@@ -502,6 +517,28 @@ mod tests {
         assert_eq!(out["output"][0]["type"], "function_call");
         assert_eq!(out["output"][1]["content"][0]["text"], "hello");
         assert_eq!(out["usage"]["total_tokens"], 5);
+    }
+
+    #[test]
+    fn preserves_non_stream_reasoning_response_text() {
+        let out = chat_completion_response_to_responses(json!({
+            "id": "chatcmpl_reasoning",
+            "created": 1710000000,
+            "model": "deepseek-reasoner",
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "reasoning_content": "first think",
+                    "content": "final answer"
+                },
+                "finish_reason": "stop"
+            }]
+        }));
+
+        assert_eq!(out["output"][0]["type"], "reasoning");
+        assert_eq!(out["output"][0]["summary"][0]["text"], "first think");
+        assert_eq!(out["output"][1]["type"], "message");
+        assert_eq!(out["output"][1]["content"][0]["text"], "final answer");
     }
 
     #[test]
