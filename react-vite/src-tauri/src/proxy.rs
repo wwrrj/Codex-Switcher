@@ -813,6 +813,7 @@ async fn proxy_request(state: ProxyAppState, req: Request<Body>) -> Result<Respo
     let mut last_provider: Option<String> = None;
     let config = load_proxy_config(&state.home)?;
     let retry_allowed = config.routing.automatic_failover && is_replay_safe_request(&method, &path);
+    let force_disk_oauth = is_account_scoped_backend_request(&method, &path);
     let max_attempts = if retry_allowed {
         config.routing.max_retries.saturating_add(1)
     } else {
@@ -822,11 +823,15 @@ async fn proxy_request(state: ProxyAppState, req: Request<Body>) -> Result<Respo
     for attempt_idx in 0..max_attempts {
         let accounts = core::list_accounts(&state.home).unwrap_or_default();
         let provider_list = providers::merged_providers(&state.home, &accounts)?;
-        let Some(decision) = routing::choose_provider(&provider_list, &config.routing, &attempted)
-        else {
+        let decision = if force_disk_oauth {
+            choose_disk_oauth_provider(&provider_list, &accounts, &attempted)
+        } else {
+            routing::choose_provider(&provider_list, &config.routing, &attempted)
+                .map(|decision| decision.provider)
+        };
+        let Some(provider) = decision else {
             break;
         };
-        let provider = decision.provider;
         last_provider = Some(provider.name.clone());
         attempted.push(provider.id.clone());
 
@@ -866,13 +871,15 @@ async fn proxy_request(state: ProxyAppState, req: Request<Body>) -> Result<Respo
                     .map(|failure| (sanitize_message(&failure.reason), failure.status_code))
                     .unwrap_or_else(|| (sanitize_message(&error.to_string()), None));
                 let retryable_failure = is_retryable_proxy_error(&error);
-                providers::mark_provider_failure(
-                    &state.home,
-                    &provider.id,
-                    &reason,
-                    config.routing.cooldown_seconds,
-                )
-                .ok();
+                if retry_allowed {
+                    providers::mark_provider_failure(
+                        &state.home,
+                        &provider.id,
+                        &reason,
+                        config.routing.cooldown_seconds,
+                    )
+                    .ok();
+                }
                 let next_provider = if retryable_failure && attempt_idx + 1 < max_attempts {
                     let accounts = core::list_accounts(&state.home).unwrap_or_default();
                     let provider_list = providers::merged_providers(&state.home, &accounts)?;
@@ -923,12 +930,6 @@ async fn proxy_request(state: ProxyAppState, req: Request<Body>) -> Result<Respo
 }
 
 fn is_replay_safe_request(method: &Method, path: &str) -> bool {
-    if matches!(
-        *method,
-        Method::GET | Method::HEAD | Method::OPTIONS | Method::TRACE
-    ) {
-        return true;
-    }
     if *method != Method::POST {
         return false;
     }
@@ -939,6 +940,36 @@ fn is_replay_safe_request(method: &Method, path: &str) -> bool {
         || normalized.ends_with("/chat/completions")
 }
 
+fn is_account_scoped_backend_request(method: &Method, path: &str) -> bool {
+    if is_replay_safe_request(method, path) {
+        return false;
+    }
+    path == "/api"
+        || path.starts_with("/api/")
+        || path == "/backend-api"
+        || path.starts_with("/backend-api/")
+}
+
+fn choose_disk_oauth_provider(
+    providers: &[ProviderConfig],
+    accounts: &[AccountMeta],
+    previous_provider_ids: &[String],
+) -> Option<ProviderConfig> {
+    let disk_account = accounts
+        .iter()
+        .find(|account| account.is_active == Some(true))
+        .map(|account| account.name.as_str())?;
+    providers
+        .iter()
+        .find(|provider| {
+            provider.kind == ProviderKind::ChatGptOauth
+                && provider.account_name.as_deref() == Some(disk_account)
+                && !previous_provider_ids.contains(&provider.id)
+                && provider.enabled
+        })
+        .cloned()
+}
+
 fn is_retryable_proxy_error(error: &anyhow::Error) -> bool {
     if let Some(failure) = error.downcast_ref::<UpstreamFailure>() {
         return failure.retryable;
@@ -947,7 +978,11 @@ fn is_retryable_proxy_error(error: &anyhow::Error) -> bool {
 }
 
 fn default_synthetic_models() -> Vec<String> {
-    vec!["gpt-4.1".to_string(), "gpt-4.1-mini".to_string()]
+    vec![
+        "gpt-5.5".to_string(),
+        "gpt-5.4".to_string(),
+        "gpt-5.4-mini".to_string(),
+    ]
 }
 
 fn record_failover(
@@ -1059,7 +1094,7 @@ async fn forward_once(
         let requested_model = json
             .get("model")
             .and_then(serde_json::Value::as_str)
-            .unwrap_or("gpt-4.1");
+            .unwrap_or("gpt-5.4-mini");
         let model = transforms::mapped_model(requested_model, &provider.model_map);
         upstream_body = Bytes::from(serde_json::to_vec(
             &transforms::responses_to_chat_completions(json, Some(&model)),
@@ -1886,7 +1921,9 @@ mod tests {
         let state = start_proxy(home.clone()).await.unwrap();
         let response = reqwest::Client::new()
             .post(format!("{}/v1/responses", state.listen_url.unwrap()))
-            .json(&serde_json::json!({ "model": "gpt-4.1", "input": "hello", "stream": false }))
+            .json(
+                &serde_json::json!({ "model": "gpt-5.4-mini", "input": "hello", "stream": false }),
+            )
             .send()
             .await
             .unwrap();
@@ -1961,7 +1998,7 @@ mod tests {
         let response = reqwest::Client::new()
             .post(format!("{}/v1/responses", state.listen_url.unwrap()))
             .json(&serde_json::json!({
-                "model": "gpt-4.1",
+                "model": "gpt-5.4-mini",
                 "input": "phase2 smoke secret-body-marker",
                 "stream": false
             }))
@@ -2041,7 +2078,7 @@ mod tests {
         let state = start_proxy(home.clone()).await.unwrap();
         let response = reqwest::Client::new()
             .post(format!("{}/v1/responses", state.listen_url.unwrap()))
-            .json(&serde_json::json!({ "model": "gpt-4.1", "input": "hello", "stream": true }))
+            .json(&serde_json::json!({ "model": "gpt-5.4-mini", "input": "hello", "stream": true }))
             .send()
             .await
             .unwrap();
@@ -2097,7 +2134,7 @@ mod tests {
         let state = start_proxy(home.clone()).await.unwrap();
         let response = reqwest::Client::new()
             .post(format!("{}/v1/responses", state.listen_url.unwrap()))
-            .json(&serde_json::json!({ "model": "gpt-4.1", "input": "hello", "stream": true }))
+            .json(&serde_json::json!({ "model": "gpt-5.4-mini", "input": "hello", "stream": true }))
             .send()
             .await
             .unwrap();
@@ -2145,7 +2182,7 @@ mod tests {
         assert_eq!(response.status(), reqwest::StatusCode::OK);
         let body: serde_json::Value = response.json().await.unwrap();
         assert_eq!(body["object"], "list");
-        assert_eq!(body["data"][0]["id"], "gpt-4.1");
+        assert_eq!(body["data"][0]["id"], "gpt-5.5");
         assert_eq!(body["data"][0]["owned_by"], "Codex Switcher");
         let requests = load_requests(&home);
         assert_eq!(requests.len(), 1);
@@ -2335,7 +2372,9 @@ mod tests {
         let state = start_proxy(home.clone()).await.unwrap();
         let response = reqwest::Client::new()
             .post(format!("{}/v1/responses", state.listen_url.unwrap()))
-            .json(&serde_json::json!({ "model": "gpt-4.1", "input": "hello", "stream": false }))
+            .json(
+                &serde_json::json!({ "model": "gpt-5.4-mini", "input": "hello", "stream": false }),
+            )
             .send()
             .await
             .unwrap();
@@ -2359,7 +2398,7 @@ mod tests {
 
     #[test]
     fn classifies_replay_safe_requests() {
-        assert!(is_replay_safe_request(
+        assert!(!is_replay_safe_request(
             &Method::GET,
             "/backend-api/accounts/check"
         ));
@@ -2373,6 +2412,59 @@ mod tests {
             "/backend-api/conversation"
         ));
         assert!(!is_replay_safe_request(&Method::DELETE, "/v1/responses"));
+    }
+
+    #[test]
+    fn account_scoped_backend_requests_use_disk_oauth_provider() {
+        let accounts = vec![
+            AccountMeta {
+                name: "phone@example.com".to_string(),
+                note: None,
+                created_at: Utc::now().to_rfc3339(),
+                updated_at: Utc::now().to_rfc3339(),
+                source: None,
+                sha256_prefix: None,
+                size: None,
+                is_active: Some(true),
+                last_usage_check_at: None,
+                usage: None,
+                subscription: None,
+                manual_subscription_override: None,
+                priority: Some(false),
+                health: AccountHealth::Healthy,
+                health_message: None,
+                auth_tokens: Vec::new(),
+            },
+            AccountMeta {
+                name: "work@example.com".to_string(),
+                note: None,
+                created_at: Utc::now().to_rfc3339(),
+                updated_at: Utc::now().to_rfc3339(),
+                source: None,
+                sha256_prefix: None,
+                size: None,
+                is_active: Some(false),
+                last_usage_check_at: None,
+                usage: None,
+                subscription: None,
+                manual_subscription_override: None,
+                priority: Some(false),
+                health: AccountHealth::Healthy,
+                health_message: None,
+                auth_tokens: Vec::new(),
+            },
+        ];
+        let providers = accounts
+            .iter()
+            .map(providers::oauth_provider_for_account)
+            .collect::<Vec<_>>();
+        let chosen = choose_disk_oauth_provider(&providers, &accounts, &[]).unwrap();
+
+        assert!(is_account_scoped_backend_request(
+            &Method::GET,
+            "/backend-api/accounts/acc/settings"
+        ));
+        assert_eq!(chosen.account_name.as_deref(), Some("phone@example.com"));
     }
 
     #[test]
@@ -2529,7 +2621,9 @@ mod tests {
         let state = start_proxy(home.clone()).await.unwrap();
         let response = reqwest::Client::new()
             .post(format!("{}/v1/responses", state.listen_url.unwrap()))
-            .json(&serde_json::json!({ "model": "gpt-4.1", "input": "hello", "stream": false }))
+            .json(
+                &serde_json::json!({ "model": "gpt-5.4-mini", "input": "hello", "stream": false }),
+            )
             .send()
             .await
             .unwrap();
@@ -2587,7 +2681,9 @@ mod tests {
         let state = start_proxy(home.clone()).await.unwrap();
         let response = reqwest::Client::new()
             .post(format!("{}/v1/responses", state.listen_url.unwrap()))
-            .json(&serde_json::json!({ "model": "gpt-4.1", "input": "hello", "stream": false }))
+            .json(
+                &serde_json::json!({ "model": "gpt-5.4-mini", "input": "hello", "stream": false }),
+            )
             .send()
             .await
             .unwrap();

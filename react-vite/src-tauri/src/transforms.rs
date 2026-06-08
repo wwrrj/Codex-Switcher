@@ -9,7 +9,7 @@ pub fn responses_to_chat_completions(mut input: Value, model_override: Option<&s
                 .and_then(Value::as_str)
                 .map(str::to_string)
         })
-        .unwrap_or_else(|| "gpt-4.1".to_string());
+        .unwrap_or_else(|| "gpt-5.4-mini".to_string());
     let stream = input.get("stream").and_then(Value::as_bool).unwrap_or(true);
     let messages = normalize_messages(input.get_mut("input").cloned().unwrap_or(Value::Null));
 
@@ -451,7 +451,7 @@ mod tests {
     #[test]
     fn converts_responses_input_to_chat_messages() {
         let input = json!({
-            "model": "gpt-4.1",
+            "model": "gpt-5.4-mini",
             "input": "hello",
             "stream": true,
             "max_output_tokens": 100
@@ -475,7 +475,7 @@ mod tests {
     #[test]
     fn preserves_reasoning_config_in_chat_request() {
         let input = json!({
-            "model": "gpt-4.1",
+            "model": "gpt-5.4-mini",
             "input": "think",
             "reasoning": { "effort": "high" }
         });
@@ -486,7 +486,7 @@ mod tests {
     #[test]
     fn converts_response_tools_to_chat_function_tools() {
         let input = json!({
-            "model": "gpt-4.1",
+            "model": "gpt-5.4-mini",
             "input": "hello",
             "tools": [{
                 "type": "function",
@@ -504,7 +504,7 @@ mod tests {
     #[test]
     fn preserves_image_content_parts_for_chat_providers() {
         let input = json!({
-            "model": "gpt-4.1",
+            "model": "gpt-5.4-mini",
             "input": [{
                 "type": "message",
                 "role": "user",
@@ -526,7 +526,7 @@ mod tests {
     #[test]
     fn converts_file_content_parts_to_text_references() {
         let input = json!({
-            "model": "gpt-4.1",
+            "model": "gpt-5.4-mini",
             "input": [{
                 "type": "message",
                 "role": "user",
@@ -556,7 +556,7 @@ mod tests {
     #[test]
     fn converts_function_call_output_to_tool_message() {
         let input = json!({
-            "model": "gpt-4.1",
+            "model": "gpt-5.4-mini",
             "input": [{
                 "type": "function_call_output",
                 "call_id": "call_1",
@@ -572,7 +572,7 @@ mod tests {
     #[test]
     fn converts_function_call_input_to_assistant_tool_call() {
         let input = json!({
-            "model": "gpt-4.1",
+            "model": "gpt-5.4-mini",
             "input": [
                 {
                     "type": "function_call",
@@ -703,8 +703,8 @@ mod tests {
     #[test]
     fn maps_model_when_provider_has_override() {
         let mut map = std::collections::BTreeMap::new();
-        map.insert("gpt-4.1".to_string(), "deepseek-chat".to_string());
-        assert_eq!(mapped_model("gpt-4.1", &Some(map)), "deepseek-chat");
-        assert_eq!(mapped_model("gpt-4.1-mini", &None), "gpt-4.1-mini");
+        map.insert("gpt-5.4".to_string(), "deepseek-chat".to_string());
+        assert_eq!(mapped_model("gpt-5.4", &Some(map)), "deepseek-chat");
+        assert_eq!(mapped_model("gpt-5.4-mini", &None), "gpt-5.4-mini");
     }
 }

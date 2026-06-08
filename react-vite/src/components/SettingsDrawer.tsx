@@ -95,7 +95,7 @@ function serializeModelMap(map?: Record<string, string>): string {
     .join('\n')
 }
 
-const codexModelAliases = ['gpt-5.1-codex', 'gpt-5', 'gpt-4.1', 'gpt-4.1-mini']
+const codexModelAliases = ['gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini']
 
 function modelMapFromModels(models: string[]): string {
   const preferred = models.find((model) => /codex|gpt|chat|glm|deepseek|kimi|mimo/i.test(model)) ?? models[0]
@@ -586,7 +586,7 @@ export default function SettingsDrawer({ open, onClose }: Props) {
               <textarea
                 value={providerModelMap}
                 onChange={(event) => setProviderModelMap(event.target.value)}
-                placeholder={'模型映射（可选），每行一个：\ngpt-4.1=deepseek-chat\ngpt-4.1-mini=glm-4.5'}
+                placeholder={'模型映射（可选），每行一个：\ngpt-5.5=deepseek-chat\ngpt-5.4-mini=glm-4.5'}
                 rows={3}
                 className="w-full px-2.5 py-1.5 rounded-md text-xs bg-bg-elevated border border-line text-fg placeholder:text-fg-subtle focus:border-primary focus:outline-none resize-none"
               />
