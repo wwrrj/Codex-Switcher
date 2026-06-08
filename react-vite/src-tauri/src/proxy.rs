@@ -588,8 +588,14 @@ pub async fn send_proxy_test_request(home: PathBuf) -> Result<ProxyTestResult> {
         .or_else(|| state.mobile_residency.request_provider.clone());
     let failovers_before = load_failovers(&home).len();
     let started = Instant::now();
+    let test_path = state
+        .request_provider
+        .as_ref()
+        .filter(|provider| provider.kind == ProviderKind::ChatGptOauth)
+        .map(|_| "/backend-api/api/codex")
+        .unwrap_or("/v1/responses");
     let response = reqwest::Client::new()
-        .post(format!("{}/v1/responses", listen_url.trim_end_matches('/')))
+        .post(format!("{}{}", listen_url.trim_end_matches('/'), test_path))
         .json(&serde_json::json!({
             "model": "gpt-5.4-mini",
             "input": "Reply only: ok",
@@ -623,7 +629,7 @@ pub async fn send_proxy_test_request(home: PathBuf) -> Result<ProxyTestResult> {
         path: latest_event
             .as_ref()
             .map(|event| event.path.clone())
-            .unwrap_or_else(|| "/v1/responses".to_string()),
+            .unwrap_or_else(|| test_path.to_string()),
         status_code: latest_event
             .as_ref()
             .and_then(|event| event.status_code)
@@ -1066,6 +1072,7 @@ fn is_inference_request_parts(method: &str, path: &str) -> bool {
         || normalized.ends_with("/responses")
         || normalized.ends_with("/v1/chat/completions")
         || normalized.ends_with("/chat/completions")
+        || normalized == "/backend-api/api/codex"
 }
 
 fn is_account_scoped_backend_request(method: &Method, path: &str) -> bool {
@@ -1248,7 +1255,9 @@ async fn forward_once(
     let mut upstream_body = body;
     let mut url = upstream_url;
     let mut transform_chat_stream = false;
-    if is_chat_completion_provider(provider) && path.ends_with("/responses") {
+    if is_chat_completion_provider(provider)
+        && (path.ends_with("/responses") || path.trim_end_matches('/') == "/backend-api/api/codex")
+    {
         let json: serde_json::Value =
             serde_json::from_slice(&upstream_body).context("解析 Responses 请求失败")?;
         let requested_model = json
@@ -2575,6 +2584,10 @@ mod tests {
             "/backend-api/accounts/check"
         ));
         assert!(is_replay_safe_request(&Method::POST, "/v1/responses"));
+        assert!(is_replay_safe_request(
+            &Method::POST,
+            "/backend-api/api/codex"
+        ));
         assert!(is_replay_safe_request(
             &Method::POST,
             "/v1/chat/completions"
