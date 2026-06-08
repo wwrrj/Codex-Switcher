@@ -345,7 +345,12 @@ pub async fn restore_proxy_on_startup(home: PathBuf) -> Result<ProxyState> {
             .account_name
             .clone()
             .ok_or_else(|| anyhow::anyhow!("移动端驻留已启用，但未选择账号"))?;
-        mobile_residency::restore_mobile_residency_auth(&home, &account)?;
+        if let Err(error) = mobile_residency::restore_mobile_residency_auth(&home, &account) {
+            let message = format!("移动端驻留异常：{}", sanitize_message(&error.to_string()));
+            core::append_app_log(&home, LogLevel::Warning, &message);
+            return Err(error);
+        }
+        core::append_app_log(&home, LogLevel::Success, "已恢复移动端驻留状态");
         log::info!("mobile residency restored on startup");
     }
     if config.enabled {
@@ -499,6 +504,13 @@ pub fn set_mobile_residency_account(home: &Path, account_name: String) -> Result
     let mut config = load_proxy_config(home)?;
     config.mobile_residency.account_name = Some(account_name);
     save_proxy_config(home, &config)?;
+    if let Some(account) = &config.mobile_residency.account_name {
+        core::append_app_log(
+            home,
+            LogLevel::Success,
+            format!("已设置移动端驻留：{account}"),
+        );
+    }
     get_proxy_state(home)
 }
 
@@ -512,6 +524,7 @@ pub fn enable_mobile_residency(home: &Path) -> Result<ProxyState> {
     mobile_residency::restore_mobile_residency_auth(home, &account)?;
     config.mobile_residency.enabled = true;
     save_proxy_config(home, &config)?;
+    core::append_app_log(home, LogLevel::Success, "已启用移动端驻留");
     get_proxy_state(home)
 }
 
@@ -519,6 +532,7 @@ pub fn disable_mobile_residency(home: &Path) -> Result<ProxyState> {
     let mut config = load_proxy_config(home)?;
     config.mobile_residency.enabled = false;
     save_proxy_config(home, &config)?;
+    core::append_app_log(home, LogLevel::Info, "已关闭移动端驻留");
     get_proxy_state(home)
 }
 
@@ -527,6 +541,7 @@ pub fn clear_mobile_residency(home: &Path) -> Result<ProxyState> {
     config.mobile_residency.enabled = false;
     config.mobile_residency.account_name = None;
     save_proxy_config(home, &config)?;
+    core::append_app_log(home, LogLevel::Info, "已清除移动端驻留");
     get_proxy_state(home)
 }
 
@@ -538,6 +553,7 @@ pub fn restore_mobile_residency(home: &Path) -> Result<ProxyState> {
         .clone()
         .ok_or_else(|| anyhow::anyhow!("未选择移动端驻留账号"))?;
     mobile_residency::restore_mobile_residency_auth(home, &account)?;
+    core::append_app_log(home, LogLevel::Success, "已恢复移动端驻留状态");
     get_proxy_state(home)
 }
 
@@ -1794,6 +1810,8 @@ mod tests {
         assert!(state.listen_url.is_some());
         let restored = std::fs::read_to_string(home.join("auth.json")).unwrap();
         assert!(restored.contains("access-token"));
+        let logs = core::load_app_logs(&home);
+        assert!(logs.iter().any(|log| log.message == "已恢复移动端驻留状态"));
         stop_proxy(&home).unwrap();
         let _ = std::fs::remove_dir_all(home);
     }

@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use crate::models::*;
+use crate::secrets::sanitize_message;
 
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
@@ -50,6 +51,9 @@ fn config_dir(home: &Path) -> PathBuf {
 }
 fn config_file(home: &Path) -> PathBuf {
     config_dir(home).join("settings.json")
+}
+fn app_logs_file(home: &Path) -> PathBuf {
+    config_dir(home).join("app_logs.json")
 }
 fn priority_file(home: &Path) -> PathBuf {
     config_dir(home).join("priorities.json")
@@ -99,6 +103,35 @@ fn ensure_dir(path: &Path) -> Result<()> {
         std::fs::create_dir_all(path)?;
     }
     Ok(())
+}
+
+pub fn load_app_logs(home: &Path) -> Vec<AppLog> {
+    let path = app_logs_file(home);
+    if !path.exists() {
+        return Vec::new();
+    }
+    read_json(&path)
+        .and_then(|value| serde_json::from_value(value).context("解析操作日志失败"))
+        .unwrap_or_default()
+}
+
+pub fn append_app_log(home: &Path, level: LogLevel, message: impl AsRef<str>) {
+    let mut logs = load_app_logs(home);
+    logs.insert(
+        0,
+        AppLog {
+            id: uuid::Uuid::new_v4().to_string(),
+            time: Utc::now().to_rfc3339(),
+            level,
+            message: sanitize_message(message.as_ref()),
+        },
+    );
+    logs.truncate(100);
+    let _ = ensure_dir(&config_dir(home));
+    let _ = write_json(
+        &app_logs_file(home),
+        &serde_json::to_value(&logs).unwrap_or(Value::Array(Vec::new())),
+    );
 }
 
 fn jwt_expires_at(token: &str) -> Option<i64> {
@@ -2811,7 +2844,7 @@ pub fn get_app_state(custom_home: Option<&str>) -> Result<AppState> {
         active_account,
         auth_status,
         accounts,
-        logs: Vec::new(), // Logs are ephemeral, populated at runtime
+        logs: load_app_logs(&actual_home),
         settings,
         switch_history: get_switch_history(&actual_home).unwrap_or_default(),
         scheduler: get_scheduler_state(&actual_home)?,
@@ -2831,6 +2864,25 @@ mod tests {
         ));
         std::fs::create_dir_all(&path).unwrap();
         path
+    }
+
+    #[test]
+    fn app_logs_are_persisted_and_sanitized() {
+        let home = temp_home("app-logs");
+        append_app_log(
+            &home,
+            LogLevel::Warning,
+            "移动端驻留异常：Bearer eyJsecret.token.value",
+        );
+
+        let logs = load_app_logs(&home);
+        assert_eq!(logs.len(), 1);
+        assert_eq!(logs[0].level, LogLevel::Warning);
+        assert!(logs[0].message.contains("移动端驻留异常"));
+        assert!(logs[0].message.contains("[REDACTED]"));
+        assert!(!logs[0].message.contains("eyJsecret"));
+
+        let _ = std::fs::remove_dir_all(home);
     }
 
     #[test]
