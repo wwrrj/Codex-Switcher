@@ -208,6 +208,9 @@ export interface FailoverEvent {
   toProvider?: string;
   reason: string;
   statusCode?: number;
+  method?: string;
+  path?: string;
+  replaySafe?: boolean;
 }
 
 export interface MobileResidencyState {

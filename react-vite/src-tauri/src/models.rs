@@ -381,6 +381,9 @@ pub struct FailoverEvent {
     pub to_provider: Option<String>,
     pub reason: String,
     pub status_code: Option<u16>,
+    pub method: Option<String>,
+    pub path: Option<String>,
+    pub replay_safe: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

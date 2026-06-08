@@ -607,7 +607,16 @@ async fn proxy_request(state: ProxyAppState, req: Request<Body>) -> Result<Respo
                     None
                 };
                 if let Some(next_provider) = next_provider.as_ref() {
-                    record_failover(&state.home, &provider, next_provider, &reason, status_code);
+                    record_failover(
+                        &state.home,
+                        &provider,
+                        next_provider,
+                        &reason,
+                        status_code,
+                        &method,
+                        &path,
+                        retry_allowed,
+                    );
                 }
                 last_error = Some(error);
                 if attempt_idx + 1 < max_attempts {
@@ -643,6 +652,9 @@ fn record_failover(
     to: &ProviderConfig,
     reason: &str,
     status_code: Option<u16>,
+    method: &Method,
+    path: &str,
+    replay_safe: bool,
 ) {
     append_failover(
         home,
@@ -653,6 +665,9 @@ fn record_failover(
             to_provider: Some(to.name.clone()),
             reason: sanitize_message(reason),
             status_code,
+            method: Some(method.as_str().to_string()),
+            path: Some(path.to_string()),
+            replay_safe: Some(replay_safe),
         },
     );
 }
@@ -1351,6 +1366,9 @@ mod tests {
         assert_eq!(failovers[0].from_provider, "provider:bad");
         assert_eq!(failovers[0].to_provider.as_deref(), Some("provider:good"));
         assert_eq!(failovers[0].status_code, Some(429));
+        assert_eq!(failovers[0].method.as_deref(), Some("POST"));
+        assert_eq!(failovers[0].path.as_deref(), Some("/v1/responses"));
+        assert_eq!(failovers[0].replay_safe, Some(true));
         stop_proxy(&home).unwrap();
         let _ = std::fs::remove_dir_all(home);
     }

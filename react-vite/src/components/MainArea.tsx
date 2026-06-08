@@ -252,6 +252,11 @@ export default function MainArea({ onRename, onDelete, onAddAccount }: Props) {
                     <p className="text-[10px] text-fg-subtle mt-1 truncate" title={event.reason}>
                       {event.statusCode ? `${event.statusCode} · ` : ''}{event.reason}
                     </p>
+                    {(event.method || event.path) && (
+                      <p className="text-[10px] text-fg-subtle/80 mt-0.5 truncate" title={`${event.method ?? ''} ${event.path ?? ''}`}>
+                        {[event.method, event.path, event.replaySafe ? '已安全重放' : undefined].filter(Boolean).join(' · ')}
+                      </p>
+                    )}
                   </div>
                 ))}
               </div>
