@@ -422,8 +422,37 @@ pub async fn check_provider_health(home: PathBuf, provider_id: String) -> Result
         .ok_or_else(|| anyhow::anyhow!("请求出口不存在：{}", provider_id))?;
 
     if provider.kind == ProviderKind::ChatGptOauth {
-        if let Some(account) = &provider.account_name {
-            providers::read_access_token_for_account(&home, account)?;
+        let account_name = provider
+            .account_name
+            .as_deref()
+            .ok_or_else(|| anyhow::anyhow!("OAuth Provider 缺少账号名"))?;
+        if let Err(error) = core::refresh_account_auth_tokens(&home, account_name, false).await {
+            let message = sanitize_message(&error.to_string());
+            core::append_app_log(
+                &home,
+                LogLevel::Warning,
+                format!("OAuth 出口健康检查失败：{}，{}", account_name, message),
+            );
+            return Err(anyhow::anyhow!("OAuth 出口健康检查失败：{}", message));
+        }
+        let account = core::list_accounts(&home)?
+            .into_iter()
+            .find(|account| account.name == account_name)
+            .ok_or_else(|| anyhow::anyhow!("OAuth 账号不存在：{}", account_name))?;
+        if matches!(
+            account.health,
+            AccountHealth::Expired | AccountHealth::Invalid
+        ) {
+            let message = account
+                .health_message
+                .clone()
+                .unwrap_or_else(|| "账号登录状态异常".to_string());
+            core::append_app_log(
+                &home,
+                LogLevel::Warning,
+                format!("OAuth 出口健康检查失败：{}，{}", account.name, message),
+            );
+            return Err(anyhow::anyhow!("OAuth 出口健康检查失败：{}", message));
         }
         return get_proxy_state(&home);
     }
@@ -1502,6 +1531,22 @@ mod tests {
         format!("http://{}", addr)
     }
 
+    fn write_oauth_account(home: &Path, name: &str) {
+        let account_dir = home.join("accounts").join(name);
+        std::fs::create_dir_all(&account_dir).unwrap();
+        std::fs::write(
+            account_dir.join("auth.json"),
+            serde_json::json!({
+                "tokens": {
+                    "access_token": "header.eyJleHAiOjQxMDI0NDgwMDB9.signature",
+                    "refresh_token": "refresh-token"
+                }
+            })
+            .to_string(),
+        )
+        .unwrap();
+    }
+
     #[tokio::test]
     async fn check_provider_health_updates_status() {
         let _guard = TEST_PROXY_MUTEX.lock().await;
@@ -1534,6 +1579,57 @@ mod tests {
             .unwrap();
         assert_eq!(provider.health.status, ProviderHealthStatus::Healthy);
         assert!(provider.health.last_error.is_none());
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    #[tokio::test]
+    async fn check_oauth_provider_health_uses_account_health() {
+        let _guard = TEST_PROXY_MUTEX.lock().await;
+        let home = temp_home("oauth-health-ok");
+        write_oauth_account(&home, "oauth@example.com");
+
+        let state = check_provider_health(home.clone(), "account:oauth@example.com".to_string())
+            .await
+            .unwrap();
+        let provider = state
+            .providers
+            .iter()
+            .find(|provider| provider.id == "account:oauth@example.com")
+            .unwrap();
+        assert_eq!(provider.health.status, ProviderHealthStatus::Healthy);
+        assert!(core::load_app_logs(&home).is_empty());
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    #[tokio::test]
+    async fn check_oauth_provider_health_logs_missing_account() {
+        let _guard = TEST_PROXY_MUTEX.lock().await;
+        let home = temp_home("oauth-health-missing");
+        providers::save_provider(
+            &home,
+            ProviderConfig {
+                id: "provider:missing-oauth".to_string(),
+                name: "Missing OAuth".to_string(),
+                kind: ProviderKind::ChatGptOauth,
+                enabled: true,
+                base_url: "https://chatgpt.com/backend-api".to_string(),
+                account_name: Some("missing@example.com".to_string()),
+                api_key: None,
+                model_map: None,
+                include_in_failover: true,
+                health: ProviderHealth::default(),
+            },
+        )
+        .unwrap();
+
+        let error = check_provider_health(home.clone(), "provider:missing-oauth".to_string())
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("OAuth 出口健康检查失败"));
+        let logs = core::load_app_logs(&home);
+        assert!(logs.iter().any(|log| log
+            .message
+            .contains("OAuth 出口健康检查失败：missing@example.com")));
         let _ = std::fs::remove_dir_all(home);
     }
 
