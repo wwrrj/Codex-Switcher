@@ -537,7 +537,8 @@ async fn proxy_request(state: ProxyAppState, req: Request<Body>) -> Result<Respo
     let mut attempted = Vec::new();
     let mut last_error: Option<anyhow::Error> = None;
     let config = load_proxy_config(&state.home)?;
-    let max_attempts = if config.routing.automatic_failover {
+    let retry_allowed = config.routing.automatic_failover && is_replay_safe_request(&method, &path);
+    let max_attempts = if retry_allowed {
         config.routing.max_retries.saturating_add(1)
     } else {
         1
@@ -600,6 +601,23 @@ async fn proxy_request(state: ProxyAppState, req: Request<Body>) -> Result<Respo
     }
 
     Err(last_error.unwrap_or_else(|| anyhow::anyhow!("没有可用请求出口")))
+}
+
+fn is_replay_safe_request(method: &Method, path: &str) -> bool {
+    if matches!(
+        *method,
+        Method::GET | Method::HEAD | Method::OPTIONS | Method::TRACE
+    ) {
+        return true;
+    }
+    if *method != Method::POST {
+        return false;
+    }
+    let normalized = path.trim_end_matches('/');
+    normalized.ends_with("/v1/responses")
+        || normalized.ends_with("/responses")
+        || normalized.ends_with("/v1/chat/completions")
+        || normalized.ends_with("/chat/completions")
 }
 
 fn record_failover(
@@ -1256,6 +1274,85 @@ mod tests {
         assert_eq!(failovers[0].from_provider, "provider:bad");
         assert_eq!(failovers[0].to_provider.as_deref(), Some("provider:good"));
         assert_eq!(failovers[0].status_code, Some(429));
+        stop_proxy(&home).unwrap();
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    #[test]
+    fn classifies_replay_safe_requests() {
+        assert!(is_replay_safe_request(
+            &Method::GET,
+            "/backend-api/accounts/check"
+        ));
+        assert!(is_replay_safe_request(&Method::POST, "/v1/responses"));
+        assert!(is_replay_safe_request(
+            &Method::POST,
+            "/v1/chat/completions"
+        ));
+        assert!(!is_replay_safe_request(
+            &Method::POST,
+            "/backend-api/conversation"
+        ));
+        assert!(!is_replay_safe_request(&Method::DELETE, "/v1/responses"));
+    }
+
+    #[tokio::test]
+    async fn proxy_does_not_replay_unknown_post_paths() {
+        let _guard = TEST_PROXY_MUTEX.lock().await;
+        let home = temp_home("unknown-post-replay");
+        let bad = start_mock_upstream(StatusCode::TOO_MANY_REQUESTS).await;
+        let good = start_mock_upstream(StatusCode::OK).await;
+        let port = available_port().await;
+        save_proxy_config(
+            &home,
+            &ProxyConfig {
+                enabled: true,
+                port,
+                routing: RoutingPolicy {
+                    request_provider_id: Some("provider:bad".to_string()),
+                    automatic_failover: true,
+                    max_retries: 2,
+                    allow_third_party_failover: true,
+                    ..RoutingPolicy::default()
+                },
+                ..ProxyConfig::default()
+            },
+        )
+        .unwrap();
+        for (id, base_url) in [("provider:bad", bad), ("provider:good", good)] {
+            providers::save_provider(
+                &home,
+                ProviderConfig {
+                    id: id.to_string(),
+                    name: id.to_string(),
+                    kind: ProviderKind::CustomChatCompletions,
+                    enabled: true,
+                    base_url: format!("{}/v1", base_url),
+                    account_name: None,
+                    api_key: Some("sk-test".to_string()),
+                    model_map: None,
+                    include_in_failover: true,
+                    health: ProviderHealth {
+                        status: ProviderHealthStatus::Healthy,
+                        ..ProviderHealth::default()
+                    },
+                },
+            )
+            .unwrap();
+        }
+
+        let state = start_proxy(home.clone()).await.unwrap();
+        let response = reqwest::Client::new()
+            .post(format!(
+                "{}/backend-api/conversation",
+                state.listen_url.unwrap()
+            ))
+            .json(&serde_json::json!({ "message": "unknown side-effect path" }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), reqwest::StatusCode::BAD_GATEWAY);
+        assert!(load_failovers(&home).is_empty());
         stop_proxy(&home).unwrap();
         let _ = std::fs::remove_dir_all(home);
     }
