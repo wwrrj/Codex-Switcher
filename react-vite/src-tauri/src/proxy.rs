@@ -1906,6 +1906,99 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn phase2_proxy_smoke_installs_routes_restores_and_redacts_logs() {
+        let _guard = TEST_PROXY_MUTEX.lock().await;
+        let home = temp_home("phase2-smoke");
+        let upstream = start_mock_upstream(StatusCode::OK).await;
+        let port = available_port().await;
+        let config_dir = home.join("config");
+        std::fs::create_dir_all(&config_dir).unwrap();
+        std::fs::write(
+            config_dir.join("config.toml"),
+            "model = \"gpt-4.1\"\nchatgpt_base_url = \"https://chatgpt.com/backend-api\"\n",
+        )
+        .unwrap();
+        save_proxy_config(
+            &home,
+            &ProxyConfig {
+                enabled: true,
+                port,
+                routing: RoutingPolicy {
+                    request_provider_id: Some("provider:smoke".to_string()),
+                    allow_third_party_failover: true,
+                    ..RoutingPolicy::default()
+                },
+                ..ProxyConfig::default()
+            },
+        )
+        .unwrap();
+        providers::save_provider(
+            &home,
+            ProviderConfig {
+                id: "provider:smoke".to_string(),
+                name: "Smoke".to_string(),
+                kind: ProviderKind::CustomChatCompletions,
+                enabled: true,
+                base_url: format!("{}/v1", upstream),
+                account_name: None,
+                api_key: Some("sk-test-secret".to_string()),
+                model_map: None,
+                include_in_failover: true,
+                health: ProviderHealth {
+                    status: ProviderHealthStatus::Healthy,
+                    ..ProviderHealth::default()
+                },
+            },
+        )
+        .unwrap();
+
+        let state = start_proxy(home.clone()).await.unwrap();
+        assert!(state.codex_config.installed);
+        assert_eq!(
+            state.codex_config.current_base_url.as_deref(),
+            Some(format!("http://127.0.0.1:{port}/backend-api").as_str())
+        );
+        let response = reqwest::Client::new()
+            .post(format!("{}/v1/responses", state.listen_url.unwrap()))
+            .json(&serde_json::json!({
+                "model": "gpt-4.1",
+                "input": "phase2 smoke secret-body-marker",
+                "stream": false
+            }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), reqwest::StatusCode::OK);
+        let body: serde_json::Value = response.json().await.unwrap();
+        assert_eq!(body["output"][0]["content"][0]["text"], "ok");
+
+        let stopped = stop_proxy(&home).unwrap();
+        assert!(!stopped.codex_config.installed);
+        assert_ne!(
+            stopped.codex_config.current_base_url.as_deref(),
+            Some(format!("http://127.0.0.1:{port}/backend-api").as_str())
+        );
+
+        let requests = load_requests(&home);
+        assert!(requests.iter().any(|event| {
+            event.success
+                && event.provider.as_deref() == Some("Smoke")
+                && event.method == "POST"
+                && event.path == "/v1/responses"
+        }));
+        let request_log_json = serde_json::to_string(&requests).unwrap();
+        assert!(!request_log_json.contains("sk-test-secret"));
+        assert!(!request_log_json.contains("secret-body-marker"));
+        assert!(!request_log_json.contains("auth.json"));
+        let app_log_json = serde_json::to_string(&core::load_app_logs(&home)).unwrap();
+        assert!(!app_log_json.contains("sk-test-secret"));
+        assert!(!app_log_json.contains("secret-body-marker"));
+        assert!(!app_log_json.contains("auth.json"));
+
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    #[tokio::test]
     async fn proxy_buffers_split_chat_sse_chunks() {
         let _guard = TEST_PROXY_MUTEX.lock().await;
         let home = temp_home("split-sse");

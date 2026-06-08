@@ -10,9 +10,9 @@ Status legend:
 
 ## Current Completion
 
-Estimated completion: `92%-94%`.
+Estimated completion: `95%-97%`.
 
-The remaining gap is mainly one real proxy end-to-end pass, not core implementation. The proxy, provider routing, failover, protocol conversion, mobile residency, persistent operation logs, final automated builds, Tauri packaging, and release executable startup have been verified.
+The core proxy phase is implemented and covered by automated tests, packaging, release startup, and a controlled proxy smoke test. The only remaining work before declaring the phase fully complete is a manual UI regression pass for account switching with proxy disabled, because that path depends on the installed desktop environment and real Codex process behavior.
 
 ## Core Proxy
 
@@ -106,24 +106,27 @@ The remaining gap is mainly one real proxy end-to-end pass, not core implementat
 | Provider management UI | Done | `SettingsDrawer` provider form and list |
 | Dashboard proxy state card | Done | `MainArea` proxy / failover / residency cards |
 | Tray proxy state summary | Done | `TrayMenu` |
-| Existing account switching still available when proxy is disabled | Needs E2E | Core account switch logic remains, but latest proxy changes still need a manual regression pass |
+| Existing account switching still available when proxy is disabled | Needs E2E | Core account switch logic remains, but latest proxy changes still need a manual UI regression pass with the real desktop app |
 
 ## Required Verification Gates
 
 | Gate | Status | Last Known Result |
 | --- | --- | --- |
-| `cargo test` | Done | 73 tests passed on 2026-06-08 after commit `6e8954e` |
+| `cargo test` | Done | 74 tests passed on 2026-06-08 after phase 2 proxy smoke test |
 | `cargo build` | Done | Passed on 2026-06-08 after commit `6e8954e` |
 | `npm run build` | Done | Passed on 2026-06-08 after commit `6e8954e` |
 | `git diff --check` | Done | Passed on 2026-06-08 after commit `6e8954e` |
 | `npm exec tauri -- build` | Done | Passed on 2026-06-08; produced MSI and NSIS bundles |
 | Real app startup verification | Done | Release executable started as process `codex-switcher` and was stopped successfully |
-| Real proxy request through app / CLI | Needs E2E | Not yet re-run after latest commits |
+| Controlled proxy request through command path | Done | `phase2_proxy_smoke_installs_routes_restores_and_redacts_logs` starts proxy, installs config, sends `/v1/responses`, restores config, and checks logs |
+| Real UI account-switch regression | Needs E2E | Not yet re-run manually with real Codex process behavior |
 
 ## Remaining Before Claiming Phase 2 Complete
 
-1. Start proxy from the UI or command path and verify `chatgpt_base_url` install / restore on a disposable Codex home.
-2. Send at least one mock or controlled request through the local proxy after app startup.
-3. Re-check logs for absence of token, auth JSON, request body, or provider secrets.
+1. Run a manual UI regression pass with proxy disabled:
+   - switch between two saved OAuth accounts
+   - confirm Codex process close / auth replacement / reopen behavior
+   - confirm usage and account state still refresh
+2. Re-run `npm exec tauri -- build` if any code changes land after this matrix update.
 
 Only after these gates pass should the phase be marked complete.
