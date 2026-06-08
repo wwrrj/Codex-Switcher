@@ -81,6 +81,7 @@ pub fn run() {
             save_provider,
             remove_provider,
             update_provider_options,
+            check_provider_health,
             install_codex_proxy_config,
             restore_codex_proxy_config,
             set_mobile_residency_account,

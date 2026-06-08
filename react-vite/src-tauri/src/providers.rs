@@ -215,6 +215,25 @@ pub fn mark_provider_used(home: &Path, provider_id: &str) -> Result<()> {
     save_provider_configs(home, &providers)
 }
 
+pub fn set_provider_health(home: &Path, provider_id: &str, health: ProviderHealth) -> Result<()> {
+    let mut providers = load_provider_configs(home)?;
+    let mut found = false;
+    for provider in &mut providers {
+        if provider.id == provider_id {
+            found = true;
+            provider.health = ProviderHealth {
+                last_error: health.last_error.map(|msg| mask_secret(&msg)),
+                ..health
+            };
+            break;
+        }
+    }
+    if !found {
+        return Err(anyhow::anyhow!("请求出口不存在：{}", provider_id));
+    }
+    save_provider_configs(home, &providers)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -259,6 +278,42 @@ mod tests {
         assert_eq!(providers[0].api_key.as_deref(), Some("sk-secret"));
         assert!(!providers[0].enabled);
         assert!(!providers[0].include_in_failover);
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    #[test]
+    fn set_provider_health_redacts_error() {
+        let home =
+            std::env::temp_dir().join(format!("codex-provider-health-{}", uuid::Uuid::new_v4()));
+        let provider = ProviderConfig {
+            id: "provider:test".to_string(),
+            name: "Relay".to_string(),
+            kind: ProviderKind::OpenAiCompatible,
+            enabled: true,
+            base_url: "https://relay.example/v1".to_string(),
+            account_name: None,
+            api_key: Some("sk-secret".to_string()),
+            model_map: None,
+            include_in_failover: true,
+            health: ProviderHealth::default(),
+        };
+        save_provider(&home, provider).unwrap();
+        set_provider_health(
+            &home,
+            "provider:test",
+            ProviderHealth {
+                status: ProviderHealthStatus::Invalid,
+                last_error: Some("bad sk-secret".to_string()),
+                last_used_at: None,
+                cooldown_until: None,
+            },
+        )
+        .unwrap();
+        let providers = load_provider_configs(&home).unwrap();
+        assert_ne!(
+            providers[0].health.last_error.as_deref(),
+            Some("bad sk-secret")
+        );
         let _ = std::fs::remove_dir_all(home);
     }
 }

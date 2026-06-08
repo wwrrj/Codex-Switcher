@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { X, RotateCcw } from 'lucide-react'
+import { X, RotateCcw, RefreshCw } from 'lucide-react'
 import { useAppStore } from '@/store/appStore'
 import { cn } from '@/lib/utils'
 import type { AppSettings, ProviderKind, PublicProviderConfig } from '@/lib/types'
@@ -53,6 +53,7 @@ export default function SettingsDrawer({ open, onClose }: Props) {
   const restoreProxyConfig = useAppStore((s) => s.restoreProxyConfig)
   const setRequestProvider = useAppStore((s) => s.setRequestProvider)
   const updateProviderOptions = useAppStore((s) => s.updateProviderOptions)
+  const checkProviderHealth = useAppStore((s) => s.checkProviderHealth)
   const setMobileResidencyAccount = useAppStore((s) => s.setMobileResidencyAccount)
   const enableMobileResidency = useAppStore((s) => s.enableMobileResidency)
   const disableMobileResidency = useAppStore((s) => s.disableMobileResidency)
@@ -63,6 +64,7 @@ export default function SettingsDrawer({ open, onClose }: Props) {
   const [providerName, setProviderName] = useState('')
   const [providerBaseUrl, setProviderBaseUrl] = useState('')
   const [providerApiKey, setProviderApiKey] = useState('')
+  const [checkingProviderId, setCheckingProviderId] = useState<string | null>(null)
 
   useEffect(() => {
     if (open) setForm(settings)
@@ -110,6 +112,15 @@ export default function SettingsDrawer({ open, onClose }: Props) {
     setProviderName('')
     setProviderBaseUrl('')
     setProviderApiKey('')
+  }
+
+  const handleCheckProvider = async (providerId: string) => {
+    setCheckingProviderId(providerId)
+    try {
+      await checkProviderHealth(providerId)
+    } finally {
+      setCheckingProviderId(null)
+    }
   }
 
   if (!open) return null
@@ -418,6 +429,14 @@ export default function SettingsDrawer({ open, onClose }: Props) {
                           )}
                         >
                           {proxyState.config.routing.requestProviderId === provider.id ? '当前出口' : '设为出口'}
+                        </button>
+                        <button
+                          onClick={() => void handleCheckProvider(provider.id)}
+                          disabled={checkingProviderId === provider.id}
+                          className="px-2.5 py-1 rounded-md text-[10px] font-medium text-fg-muted bg-bg hover:bg-bg-hover disabled:opacity-60"
+                        >
+                          <RefreshCw className={cn('inline w-2.5 h-2.5 mr-1', checkingProviderId === provider.id && 'animate-spin')} />
+                          测试连接
                         </button>
                         <button
                           onClick={() => void useAppStore.getState().removeProvider(provider.id)}

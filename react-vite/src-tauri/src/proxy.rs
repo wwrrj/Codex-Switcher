@@ -16,6 +16,7 @@ use std::fmt;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
+use std::time::Duration;
 use tokio::sync::oneshot;
 use tokio_tungstenite::connect_async;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
@@ -263,6 +264,65 @@ pub fn update_provider_options(
 ) -> Result<ProxyState> {
     providers::update_provider_options(home, provider_id, enabled, include_in_failover)?;
     get_proxy_state(home)
+}
+
+pub async fn check_provider_health(home: PathBuf, provider_id: String) -> Result<ProxyState> {
+    let accounts = core::list_accounts(&home).unwrap_or_default();
+    let provider = providers::merged_providers(&home, &accounts)?
+        .into_iter()
+        .find(|provider| provider.id == provider_id)
+        .ok_or_else(|| anyhow::anyhow!("请求出口不存在：{}", provider_id))?;
+
+    if provider.kind == ProviderKind::ChatGptOauth {
+        if let Some(account) = &provider.account_name {
+            providers::read_access_token_for_account(&home, account)?;
+        }
+        return get_proxy_state(&home);
+    }
+
+    let url = upstream_url(&provider, "/v1/models", None);
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(12))
+        .build()?;
+    let mut request = client.get(url);
+    if let Some(auth) = provider_auth_header(&home, &provider)? {
+        request = request.header(AUTHORIZATION, auth);
+    }
+    let response = request.send().await;
+    let now = Utc::now().to_rfc3339();
+    let health = match response {
+        Ok(response) if response.status().is_success() => ProviderHealth {
+            status: ProviderHealthStatus::Healthy,
+            last_error: None,
+            last_used_at: Some(now),
+            cooldown_until: None,
+        },
+        Ok(response) => {
+            let status = response.status().as_u16();
+            let health_status = match status {
+                401 | 403 => ProviderHealthStatus::Invalid,
+                429 | 500..=599 => ProviderHealthStatus::CoolingDown,
+                _ => ProviderHealthStatus::Unknown,
+            };
+            ProviderHealth {
+                status: health_status,
+                last_error: Some(format!("健康检查失败：HTTP {status}")),
+                last_used_at: Some(now),
+                cooldown_until: None,
+            }
+        }
+        Err(error) => ProviderHealth {
+            status: ProviderHealthStatus::Invalid,
+            last_error: Some(format!(
+                "健康检查失败：{}",
+                sanitize_message(&error.to_string())
+            )),
+            last_used_at: Some(now),
+            cooldown_until: None,
+        },
+    };
+    providers::set_provider_health(&home, &provider.id, health)?;
+    get_proxy_state(&home)
 }
 
 pub fn install_codex_proxy_config(home: &Path) -> Result<ProxyState> {
@@ -769,7 +829,7 @@ fn json_response(status: StatusCode, value: serde_json::Value) -> Response<Body>
 #[cfg(test)]
 mod tests {
     use super::*;
-    use axum::routing::{any as route_any, post};
+    use axum::routing::{any as route_any, get, post};
     use axum::Json;
     use once_cell::sync::Lazy;
 
@@ -857,6 +917,105 @@ mod tests {
     async fn available_port() -> u16 {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         listener.local_addr().unwrap().port()
+    }
+
+    async fn start_mock_models_upstream(status: StatusCode) -> String {
+        async fn models(State(status): State<StatusCode>) -> impl IntoResponse {
+            if status == StatusCode::OK {
+                Json(serde_json::json!({
+                    "object": "list",
+                    "data": [{ "id": "mock-model", "object": "model" }]
+                }))
+                .into_response()
+            } else {
+                (status, "health failed").into_response()
+            }
+        }
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let app = Router::new()
+            .route("/v1/models", get(models))
+            .with_state(status);
+        tauri::async_runtime::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        format!("http://{}", addr)
+    }
+
+    #[tokio::test]
+    async fn check_provider_health_updates_status() {
+        let _guard = TEST_PROXY_MUTEX.lock().await;
+        let home = temp_home("health-ok");
+        let upstream = start_mock_models_upstream(StatusCode::OK).await;
+        providers::save_provider(
+            &home,
+            ProviderConfig {
+                id: "provider:health".to_string(),
+                name: "Health".to_string(),
+                kind: ProviderKind::OpenAiCompatible,
+                enabled: true,
+                base_url: format!("{}/v1", upstream),
+                account_name: None,
+                api_key: Some("sk-test".to_string()),
+                model_map: None,
+                include_in_failover: true,
+                health: ProviderHealth::default(),
+            },
+        )
+        .unwrap();
+
+        let state = check_provider_health(home.clone(), "provider:health".to_string())
+            .await
+            .unwrap();
+        let provider = state
+            .providers
+            .iter()
+            .find(|provider| provider.id == "provider:health")
+            .unwrap();
+        assert_eq!(provider.health.status, ProviderHealthStatus::Healthy);
+        assert!(provider.health.last_error.is_none());
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    #[tokio::test]
+    async fn check_provider_health_marks_auth_failure_invalid() {
+        let _guard = TEST_PROXY_MUTEX.lock().await;
+        let home = temp_home("health-invalid");
+        let upstream = start_mock_models_upstream(StatusCode::UNAUTHORIZED).await;
+        providers::save_provider(
+            &home,
+            ProviderConfig {
+                id: "provider:invalid".to_string(),
+                name: "Invalid".to_string(),
+                kind: ProviderKind::OpenAiCompatible,
+                enabled: true,
+                base_url: format!("{}/v1", upstream),
+                account_name: None,
+                api_key: Some("sk-test".to_string()),
+                model_map: None,
+                include_in_failover: true,
+                health: ProviderHealth::default(),
+            },
+        )
+        .unwrap();
+
+        let state = check_provider_health(home.clone(), "provider:invalid".to_string())
+            .await
+            .unwrap();
+        let provider = state
+            .providers
+            .iter()
+            .find(|provider| provider.id == "provider:invalid")
+            .unwrap();
+        assert_eq!(provider.health.status, ProviderHealthStatus::Invalid);
+        assert!(provider
+            .health
+            .last_error
+            .as_deref()
+            .unwrap()
+            .contains("401"));
+        let _ = std::fs::remove_dir_all(home);
     }
 
     #[tokio::test]
