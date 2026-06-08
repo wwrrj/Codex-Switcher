@@ -78,6 +78,27 @@ fn normalize_messages(input: Value) -> Value {
                             "content": normalize_content(output)
                         });
                     }
+                    if item.get("type").and_then(Value::as_str) == Some("function_call") {
+                        let call_id = item
+                            .get("call_id")
+                            .or_else(|| item.get("id"))
+                            .and_then(Value::as_str)
+                            .unwrap_or("tool_call");
+                        let name = item.get("name").and_then(Value::as_str).unwrap_or("tool");
+                        let arguments = item.get("arguments").and_then(Value::as_str).unwrap_or("");
+                        return json!({
+                            "role": "assistant",
+                            "content": Value::Null,
+                            "tool_calls": [{
+                                "id": call_id,
+                                "type": "function",
+                                "function": {
+                                    "name": name,
+                                    "arguments": arguments
+                                }
+                            }]
+                        });
+                    }
                     json!({ "role": "user", "content": item.to_string() })
                 })
                 .collect();
@@ -477,6 +498,39 @@ mod tests {
         assert_eq!(out["messages"][0]["role"], "tool");
         assert_eq!(out["messages"][0]["tool_call_id"], "call_1");
         assert_eq!(out["messages"][0]["content"], "done");
+    }
+
+    #[test]
+    fn converts_function_call_input_to_assistant_tool_call() {
+        let input = json!({
+            "model": "gpt-4.1",
+            "input": [
+                {
+                    "type": "function_call",
+                    "call_id": "call_1",
+                    "name": "lookup",
+                    "arguments": "{\"q\":\"codex\"}"
+                },
+                {
+                    "type": "function_call_output",
+                    "call_id": "call_1",
+                    "output": "result"
+                }
+            ]
+        });
+        let out = responses_to_chat_completions(input, None);
+        assert_eq!(out["messages"][0]["role"], "assistant");
+        assert_eq!(out["messages"][0]["tool_calls"][0]["id"], "call_1");
+        assert_eq!(
+            out["messages"][0]["tool_calls"][0]["function"]["name"],
+            "lookup"
+        );
+        assert_eq!(
+            out["messages"][0]["tool_calls"][0]["function"]["arguments"],
+            "{\"q\":\"codex\"}"
+        );
+        assert_eq!(out["messages"][1]["role"], "tool");
+        assert_eq!(out["messages"][1]["tool_call_id"], "call_1");
     }
 
     #[test]
