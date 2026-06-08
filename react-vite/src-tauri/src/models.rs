@@ -59,6 +59,10 @@ pub enum UsageWindowKind {
     FiveHours,
     #[serde(rename = "7d")]
     SevenDays,
+    #[serde(rename = "30d")]
+    ThirtyDays,
+    #[serde(rename = "unknown")]
+    Unknown,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

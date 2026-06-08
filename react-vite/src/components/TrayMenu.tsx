@@ -121,7 +121,8 @@ export default function TrayMenu() {
           ) : (
             accounts.map((account) => {
               const active = account.name === activeAccount
-              const usage = account.usage?.windows.find((window) => window.window === '5h')?.percentage
+              const usageWindow = account.usage?.windows.find((window) => window.window === '5h') ?? account.usage?.windows[0]
+              const usage = usageWindow?.percentage
               const remaining = usage == null ? null : Math.max(0, Math.round(100 - usage))
               return (
                 <button

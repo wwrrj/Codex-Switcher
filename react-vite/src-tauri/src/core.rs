@@ -538,18 +538,27 @@ fn auth_identity_keys(auth_file: &Path) -> Vec<String> {
 }
 
 fn identities_match(active_identity: &[String], account_identity: &[String]) -> bool {
-    fn has_matching_prefix(prefix: &str, active_identity: &[String], account_identity: &[String]) -> bool {
+    fn has_matching_prefix(
+        prefix: &str,
+        active_identity: &[String],
+        account_identity: &[String],
+    ) -> bool {
         let active: Vec<&String> = active_identity
             .iter()
             .filter(|key| key.starts_with(prefix))
             .collect();
         !active.is_empty()
-            && active
-                .iter()
-                .any(|key| account_identity.iter().any(|account_key| account_key == *key))
+            && active.iter().any(|key| {
+                account_identity
+                    .iter()
+                    .any(|account_key| account_key == *key)
+            })
     }
 
-    if active_identity.iter().any(|key| key.starts_with("account_id:")) {
+    if active_identity
+        .iter()
+        .any(|key| key.starts_with("account_id:"))
+    {
         return has_matching_prefix("account_id:", active_identity, account_identity);
     }
     if active_identity.iter().any(|key| key.starts_with("email:")) {
@@ -781,14 +790,33 @@ fn epoch_seconds_to_rfc3339(seconds: i64) -> Option<String> {
     chrono::DateTime::<Utc>::from_timestamp(seconds, 0).map(|d| d.to_rfc3339())
 }
 
+fn usage_window_kind_from_seconds(
+    seconds: Option<i64>,
+    fallback: UsageWindowKind,
+) -> UsageWindowKind {
+    let Some(seconds) = seconds else {
+        return fallback;
+    };
+    if seconds <= 6 * 60 * 60 {
+        UsageWindowKind::FiveHours
+    } else if seconds <= 10 * 24 * 60 * 60 {
+        UsageWindowKind::SevenDays
+    } else if seconds <= 35 * 24 * 60 * 60 {
+        UsageWindowKind::ThirtyDays
+    } else {
+        UsageWindowKind::Unknown
+    }
+}
+
 fn usage_window_from_snapshot(
-    kind: UsageWindowKind,
     snapshot: Option<RateLimitWindowSnapshot>,
+    fallback: UsageWindowKind,
 ) -> Option<UsageWindow> {
     let snapshot = snapshot?;
     let percentage = snapshot.used_percent;
+    let window = usage_window_kind_from_seconds(snapshot.limit_window_seconds, fallback);
     Some(UsageWindow {
-        window: kind,
+        window,
         used: None,
         limit: None,
         remaining: None,
@@ -806,12 +834,12 @@ fn usage_info_from_payload(
     let mut windows = Vec::new();
     if let Some(rate_limit) = payload.rate_limit {
         if let Some(window) =
-            usage_window_from_snapshot(UsageWindowKind::FiveHours, rate_limit.primary_window)
+            usage_window_from_snapshot(rate_limit.primary_window, UsageWindowKind::FiveHours)
         {
             windows.push(window);
         }
         if let Some(window) =
-            usage_window_from_snapshot(UsageWindowKind::SevenDays, rate_limit.secondary_window)
+            usage_window_from_snapshot(rate_limit.secondary_window, UsageWindowKind::SevenDays)
         {
             windows.push(window);
         }
@@ -3155,8 +3183,11 @@ mod tests {
         std::fs::create_dir_all(&team_dir).unwrap();
         std::fs::write(personal_dir.join("auth.json"), personal_auth).unwrap();
         std::fs::write(team_dir.join("auth.json"), team_auth).unwrap();
-        std::fs::write(auth_path(&home), team_auth.replace("team-access", "team-access-refreshed"))
-            .unwrap();
+        std::fs::write(
+            auth_path(&home),
+            team_auth.replace("team-access", "team-access-refreshed"),
+        )
+        .unwrap();
 
         let status = detect_auth(
             &home,
@@ -3181,6 +3212,22 @@ mod tests {
         assert_eq!(personal.is_active, Some(false));
         assert_eq!(team.is_active, Some(true));
         let _ = std::fs::remove_dir_all(home);
+    }
+
+    #[test]
+    fn usage_window_kind_detects_thirty_day_team_window() {
+        assert_eq!(
+            usage_window_kind_from_seconds(Some(30 * 24 * 60 * 60), UsageWindowKind::FiveHours),
+            UsageWindowKind::ThirtyDays
+        );
+        assert_eq!(
+            usage_window_kind_from_seconds(Some(5 * 60 * 60), UsageWindowKind::Unknown),
+            UsageWindowKind::FiveHours
+        );
+        assert_eq!(
+            usage_window_kind_from_seconds(Some(7 * 24 * 60 * 60), UsageWindowKind::Unknown),
+            UsageWindowKind::SevenDays
+        );
     }
 
     #[test]

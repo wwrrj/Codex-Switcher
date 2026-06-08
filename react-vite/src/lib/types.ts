@@ -1,4 +1,4 @@
-export type UsageWindowKind = "5h" | "7d";
+export type UsageWindowKind = "5h" | "7d" | "30d" | "unknown";
 export type UsageUnit = "messages" | "credits" | "tokens" | "unknown";
 export type UsageRawSource = "official-api" | "codex-status" | "unsupported";
 

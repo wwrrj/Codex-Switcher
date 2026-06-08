@@ -103,10 +103,11 @@ export default function AccountPool({ onAddAccount }: Props) {
         ) : (
           sorted.map((acc) => {
             const isActive = acc.name === activeAccount
-            const usage5h = acc.usage?.windows.find((w) => w.window === '5h')
-            const pct = usage5h?.percentage
+            const quotaWindow = acc.usage?.windows.find((w) => w.window === '5h') ?? acc.usage?.windows[0]
+            const pct = quotaWindow?.percentage
             const remainingPct = pct == null ? null : Math.max(0, Math.round(100 - pct))
-            const resetAt = usage5h?.resetAt
+            const resetAt = quotaWindow?.resetAt
+            const quotaLabel = quotaWindow ? usageWindowShortLabel(quotaWindow.window) : '5h'
             const isConfirming = confirmTarget === acc.name
             const isPriority = !!acc.priority
             const isResidency = proxyState.mobileResidency.accountName === acc.name
@@ -171,7 +172,7 @@ export default function AccountPool({ onAddAccount }: Props) {
                   ) : remainingPct != null ? (
                     <div className="space-y-1">
                       <div className="flex items-center justify-between">
-                        <span className="text-[11px] text-fg-muted">5h 剩余</span>
+                        <span className="text-[11px] text-fg-muted">{quotaLabel} 剩余</span>
                         <span
                           className={cn(
                             'text-[11px] font-medium tabular-nums',
@@ -193,7 +194,7 @@ export default function AccountPool({ onAddAccount }: Props) {
                       {resetAt && (
                         <div className="flex items-center gap-1.5 pt-0.5 text-[10px] text-fg-subtle">
                           <Clock className="w-3 h-3 shrink-0" />
-                          <span>5h 重置</span>
+                          <span>{quotaLabel} 重置</span>
                           <span className="ml-auto tabular-nums text-fg-muted">
                             {formatResetTime(resetAt)}
                           </span>
@@ -267,4 +268,11 @@ export default function AccountPool({ onAddAccount }: Props) {
       </div>
     </div>
   )
+}
+
+function usageWindowShortLabel(window: string): string {
+  if (window === '5h') return '5h'
+  if (window === '7d') return '7d'
+  if (window === '30d') return '30d'
+  return '额度'
 }

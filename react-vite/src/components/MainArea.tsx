@@ -42,8 +42,7 @@ export default function MainArea({ onRename, onDelete, onAddAccount }: Props) {
   const usage = account?.usage ?? null
   const isUnsupported = usage?.rawSource === 'unsupported'
   const isApiKey = account?.subscription?.plan === 'api_key'
-  const windows5h = usage?.windows.find((w) => w.window === '5h') ?? null
-  const windows7d = usage?.windows.find((w) => w.window === '7d') ?? null
+  const usageWindows = usage?.windows ?? []
   const isRefreshingCurrent = refreshingUsageAccount === account?.name
 
   // Pool-level stats
@@ -474,8 +473,13 @@ export default function MainArea({ onRename, onDelete, onAddAccount }: Props) {
               </div>
             ) : (
               <div className="space-y-3">
-                <UsageWindowCard windowData={windows5h} label="5 小时窗口" />
-                <UsageWindowCard windowData={windows7d} label="7 天窗口" />
+                {usageWindows.map((windowData, index) => (
+                  <UsageWindowCard
+                    key={`${windowData.window}-${index}`}
+                    windowData={windowData}
+                    label={usageWindowLabel(windowData.window)}
+                  />
+                ))}
               </div>
             )}
           </div>
@@ -639,6 +643,19 @@ function MetaRow({ icon, label, value }: { icon: React.ReactNode; label: string;
       <span className="text-fg">{value}</span>
     </div>
   )
+}
+
+function usageWindowLabel(window: string): string {
+  switch (window) {
+    case '5h':
+      return '5 小时窗口'
+    case '7d':
+      return '7 天窗口'
+    case '30d':
+      return '30 天窗口'
+    default:
+      return '额度窗口'
+  }
 }
 
 function tokenLabel(kind: string): string {
