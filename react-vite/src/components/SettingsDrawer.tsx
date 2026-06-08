@@ -36,6 +36,21 @@ function providerHealthLabel(provider: PublicProviderConfig): string {
   return provider.enabled ? '待验证' : '已停用'
 }
 
+function parseModelMap(input: string): Record<string, string> {
+  return input
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .reduce<Record<string, string>>((map, line) => {
+      const index = line.indexOf('=')
+      if (index <= 0) return map
+      const from = line.slice(0, index).trim()
+      const to = line.slice(index + 1).trim()
+      if (from && to) map[from] = to
+      return map
+    }, {})
+}
+
 interface Props {
   open: boolean
   onClose: () => void
@@ -65,6 +80,7 @@ export default function SettingsDrawer({ open, onClose }: Props) {
   const [providerName, setProviderName] = useState('')
   const [providerBaseUrl, setProviderBaseUrl] = useState('')
   const [providerApiKey, setProviderApiKey] = useState('')
+  const [providerModelMap, setProviderModelMap] = useState('')
   const [checkingProviderId, setCheckingProviderId] = useState<string | null>(null)
 
   useEffect(() => {
@@ -100,6 +116,7 @@ export default function SettingsDrawer({ open, onClose }: Props) {
       custom_chat_completions: 'https://example.com/v1',
     }
     const name = providerName.trim() || providerKind
+    const modelMap = parseModelMap(providerModelMap)
     await useAppStore.getState().saveProvider({
       id: '',
       name,
@@ -107,12 +124,14 @@ export default function SettingsDrawer({ open, onClose }: Props) {
       enabled: true,
       baseUrl: providerBaseUrl.trim() || fallbackBaseUrl[providerKind],
       apiKey: providerApiKey.trim() || undefined,
+      modelMap: Object.keys(modelMap).length > 0 ? modelMap : undefined,
       includeInFailover: true,
       health: { status: 'unknown' },
     })
     setProviderName('')
     setProviderBaseUrl('')
     setProviderApiKey('')
+    setProviderModelMap('')
   }
 
   const handleCheckProvider = async (providerId: string) => {
@@ -375,6 +394,13 @@ export default function SettingsDrawer({ open, onClose }: Props) {
                 type="password"
                 className="w-full px-2.5 py-1.5 rounded-md text-xs bg-bg-elevated border border-line text-fg placeholder:text-fg-subtle focus:border-primary focus:outline-none"
               />
+              <textarea
+                value={providerModelMap}
+                onChange={(event) => setProviderModelMap(event.target.value)}
+                placeholder={'模型映射（可选），每行一个：\ngpt-4.1=deepseek-chat\ngpt-4.1-mini=glm-4.5'}
+                rows={3}
+                className="w-full px-2.5 py-1.5 rounded-md text-xs bg-bg-elevated border border-line text-fg placeholder:text-fg-subtle focus:border-primary focus:outline-none resize-none"
+              />
               <div className="flex flex-wrap gap-2">
                 <button
                   onClick={() => void handleSaveProvider()}
@@ -401,7 +427,7 @@ export default function SettingsDrawer({ open, onClose }: Props) {
                         <div className="min-w-0">
                           <p className="text-xs font-medium text-fg truncate">{provider.name}</p>
                           <p className="text-[10px] text-fg-subtle truncate">
-                            {providerKindLabel[provider.kind]} · {provider.hasSecret ? '已保存密钥' : '无密钥'}
+                            {providerKindLabel[provider.kind]} · {provider.hasSecret ? '已保存密钥' : '无密钥'} · {provider.modelMap && Object.keys(provider.modelMap).length > 0 ? '已配置模型映射' : '默认模型'}
                           </p>
                         </div>
                         <span

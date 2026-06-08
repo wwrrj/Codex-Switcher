@@ -171,6 +171,7 @@ export interface PublicProviderConfig {
   baseUrl: string;
   accountName?: string;
   hasSecret: boolean;
+  modelMap?: Record<string, string>;
   includeInFailover: boolean;
   health: ProviderHealth;
 }

@@ -89,6 +89,7 @@ pub fn public_provider(provider: &ProviderConfig) -> PublicProviderConfig {
         base_url: provider.base_url.clone(),
         account_name: provider.account_name.clone(),
         has_secret,
+        model_map: provider.model_map.clone(),
         include_in_failover: provider.include_in_failover,
         health: provider.health.clone(),
     }
@@ -254,6 +255,34 @@ mod tests {
         };
         let public = public_provider(&provider);
         assert!(public.has_secret);
+    }
+
+    #[test]
+    fn public_provider_exposes_model_map_without_secret() {
+        let mut map = std::collections::BTreeMap::new();
+        map.insert("gpt-4.1".to_string(), "deepseek-chat".to_string());
+        let provider = ProviderConfig {
+            id: "p1".to_string(),
+            name: "Relay".to_string(),
+            kind: ProviderKind::OpenAiCompatible,
+            enabled: true,
+            base_url: "https://relay.example/v1".to_string(),
+            account_name: None,
+            api_key: Some("sk-secret".to_string()),
+            model_map: Some(map),
+            include_in_failover: true,
+            health: ProviderHealth::default(),
+        };
+        let public = public_provider(&provider);
+        assert!(public.has_secret);
+        assert_eq!(
+            public
+                .model_map
+                .as_ref()
+                .and_then(|items| items.get("gpt-4.1"))
+                .map(String::as_str),
+            Some("deepseek-chat")
+        );
     }
 
     #[test]

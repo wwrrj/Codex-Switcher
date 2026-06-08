@@ -291,6 +291,7 @@ pub struct PublicProviderConfig {
     pub base_url: String,
     pub account_name: Option<String>,
     pub has_secret: bool,
+    pub model_map: Option<std::collections::BTreeMap<String, String>>,
     pub include_in_failover: bool,
     pub health: ProviderHealth,
 }

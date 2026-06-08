@@ -266,4 +266,12 @@ mod tests {
         assert!(event.contains("function_call"));
         assert!(event.contains("run"));
     }
+
+    #[test]
+    fn maps_model_when_provider_has_override() {
+        let mut map = std::collections::BTreeMap::new();
+        map.insert("gpt-4.1".to_string(), "deepseek-chat".to_string());
+        assert_eq!(mapped_model("gpt-4.1", &Some(map)), "deepseek-chat");
+        assert_eq!(mapped_model("gpt-4.1-mini", &None), "gpt-4.1-mini");
+    }
 }
