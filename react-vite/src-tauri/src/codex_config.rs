@@ -44,7 +44,8 @@ pub fn restore_proxy_config(home: &Path) -> Result<bool> {
     let path = config_file(home);
     let backup = backup_file(home);
     if backup.exists() {
-        std::fs::copy(&backup, &path).with_context(|| "恢复 Codex config.toml 失败")?;
+        restore_chatgpt_base_url_from_backup(&path, &backup)
+            .with_context(|| "恢复 Codex config.toml 失败")?;
         std::fs::remove_file(&backup).ok();
         return Ok(true);
     }
@@ -61,6 +62,32 @@ pub fn restore_proxy_config(home: &Path) -> Result<bool> {
         }
     }
     Ok(false)
+}
+
+fn restore_chatgpt_base_url_from_backup(path: &Path, backup: &Path) -> Result<()> {
+    let current = if path.exists() {
+        std::fs::read_to_string(path)?
+    } else {
+        String::new()
+    };
+    let backup_contents = std::fs::read_to_string(backup)?;
+    let mut current_doc = current
+        .parse::<DocumentMut>()
+        .unwrap_or_else(|_| DocumentMut::new());
+    let backup_doc = backup_contents
+        .parse::<DocumentMut>()
+        .unwrap_or_else(|_| DocumentMut::new());
+
+    if let Some(original_url) = backup_doc
+        .get("chatgpt_base_url")
+        .and_then(|item| item.as_str())
+    {
+        current_doc["chatgpt_base_url"] = value(original_url);
+    } else {
+        current_doc.remove("chatgpt_base_url");
+    }
+    std::fs::write(path, current_doc.to_string())?;
+    Ok(())
 }
 
 pub fn inspect_proxy_config(home: &Path, host: &str, port: u16) -> CodexProxyConfigStatus {
@@ -126,6 +153,49 @@ mod tests {
         restore_proxy_config(&home).unwrap();
         let restored = std::fs::read_to_string(home.join("config.toml")).unwrap();
         assert_eq!(restored, "model = \"gpt-4.1\"\n");
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    #[test]
+    fn restore_preserves_user_changes_after_install() {
+        let home = temp_home();
+        std::fs::write(home.join("config.toml"), "model = \"gpt-4.1\"\n").unwrap();
+        install_proxy_config(&home, "127.0.0.1", 14550).unwrap();
+        std::fs::write(
+            home.join("config.toml"),
+            "model = \"gpt-5\"\napproval_policy = \"never\"\nchatgpt_base_url = \"http://127.0.0.1:14550/backend-api\"\n",
+        )
+        .unwrap();
+
+        restore_proxy_config(&home).unwrap();
+
+        let restored = std::fs::read_to_string(home.join("config.toml")).unwrap();
+        assert!(restored.contains("model = \"gpt-5\""));
+        assert!(restored.contains("approval_policy = \"never\""));
+        assert!(!restored.contains("chatgpt_base_url"));
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    #[test]
+    fn restore_preserves_original_chatgpt_base_url_from_backup() {
+        let home = temp_home();
+        std::fs::write(
+            home.join("config.toml"),
+            "chatgpt_base_url = \"https://chatgpt.com/backend-api\"\nmodel = \"gpt-4.1\"\n",
+        )
+        .unwrap();
+        install_proxy_config(&home, "127.0.0.1", 14550).unwrap();
+        std::fs::write(
+            home.join("config.toml"),
+            "model = \"gpt-5\"\nchatgpt_base_url = \"http://127.0.0.1:14550/backend-api\"\n",
+        )
+        .unwrap();
+
+        restore_proxy_config(&home).unwrap();
+
+        let restored = std::fs::read_to_string(home.join("config.toml")).unwrap();
+        assert!(restored.contains("model = \"gpt-5\""));
+        assert!(restored.contains("chatgpt_base_url = \"https://chatgpt.com/backend-api\""));
         let _ = std::fs::remove_dir_all(home);
     }
 
