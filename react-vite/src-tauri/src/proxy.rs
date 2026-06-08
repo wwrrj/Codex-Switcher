@@ -174,10 +174,12 @@ pub fn get_proxy_state(home: &Path) -> Result<ProxyState> {
 
 pub async fn start_proxy(home: PathBuf) -> Result<ProxyState> {
     let mut config = load_proxy_config(&home)?;
-    config.enabled = true;
-    save_proxy_config(&home, &config)?;
 
     if RUNTIME.lock().unwrap().is_some() {
+        config.enabled = true;
+        codex_config::install_proxy_config(&home, &config.host, config.port)?;
+        config.install_codex_config = true;
+        save_proxy_config(&home, &config)?;
         return get_proxy_state(&home);
     }
 
@@ -195,6 +197,10 @@ pub async fn start_proxy(home: PathBuf) -> Result<ProxyState> {
     let listener = tokio::net::TcpListener::bind(addr)
         .await
         .with_context(|| format!("代理端口绑定失败: {}", addr))?;
+    config.enabled = true;
+    codex_config::install_proxy_config(&home, &config.host, config.port)?;
+    config.install_codex_config = true;
+    save_proxy_config(&home, &config)?;
     let (tx, rx) = oneshot::channel();
     let server = axum::serve(listener, app).with_graceful_shutdown(async {
         let _ = rx.await;
@@ -221,6 +227,8 @@ pub fn stop_proxy(home: &Path) -> Result<ProxyState> {
     }
     let mut config = load_proxy_config(home)?;
     config.enabled = false;
+    let _ = codex_config::restore_proxy_config(home)?;
+    config.install_codex_config = false;
     save_proxy_config(home, &config)?;
     get_proxy_state(home)
 }
@@ -901,6 +909,40 @@ mod tests {
         assert_eq!(response.status(), reqwest::StatusCode::OK);
         assert!(response.text().await.unwrap().contains("ok"));
         stop_proxy(&home).unwrap();
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    #[tokio::test]
+    async fn start_and_stop_proxy_manage_codex_config() {
+        let _guard = TEST_PROXY_MUTEX.lock().await;
+        let home = temp_home("lifecycle");
+        std::fs::write(home.join("config.toml"), "model = \"gpt-4.1\"\n").unwrap();
+        let port = available_port().await;
+        save_proxy_config(
+            &home,
+            &ProxyConfig {
+                enabled: false,
+                port,
+                ..ProxyConfig::default()
+            },
+        )
+        .unwrap();
+
+        let state = start_proxy(home.clone()).await.unwrap();
+        assert!(state.config.enabled);
+        assert!(state.config.install_codex_config);
+        assert!(state.codex_config.installed);
+        let expected = format!("http://127.0.0.1:{port}/backend-api");
+        assert_eq!(
+            state.codex_config.current_base_url.as_deref(),
+            Some(expected.as_str())
+        );
+
+        let stopped = stop_proxy(&home).unwrap();
+        assert!(!stopped.config.enabled);
+        assert!(!stopped.config.install_codex_config);
+        let restored = std::fs::read_to_string(home.join("config.toml")).unwrap();
+        assert_eq!(restored, "model = \"gpt-4.1\"\n");
         let _ = std::fs::remove_dir_all(home);
     }
 
