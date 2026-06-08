@@ -537,6 +537,27 @@ fn auth_identity_keys(auth_file: &Path) -> Vec<String> {
     keys
 }
 
+fn identities_match(active_identity: &[String], account_identity: &[String]) -> bool {
+    fn has_matching_prefix(prefix: &str, active_identity: &[String], account_identity: &[String]) -> bool {
+        let active: Vec<&String> = active_identity
+            .iter()
+            .filter(|key| key.starts_with(prefix))
+            .collect();
+        !active.is_empty()
+            && active
+                .iter()
+                .any(|key| account_identity.iter().any(|account_key| account_key == *key))
+    }
+
+    if active_identity.iter().any(|key| key.starts_with("account_id:")) {
+        return has_matching_prefix("account_id:", active_identity, account_identity);
+    }
+    if active_identity.iter().any(|key| key.starts_with("email:")) {
+        return has_matching_prefix("email:", active_identity, account_identity);
+    }
+    has_matching_prefix("subject:", active_identity, account_identity)
+}
+
 fn infer_subscription_from_value(
     value: &Value,
     source: SubscriptionSource,
@@ -1989,10 +2010,7 @@ pub fn detect_auth(home: &Path, names: &[String]) -> Result<CodexAuthStatus> {
             return true;
         }
         let account_identity = auth_identity_keys(&acc_auth);
-        !active_identity.is_empty()
-            && active_identity
-                .iter()
-                .any(|key| account_identity.iter().any(|account_key| account_key == key))
+        identities_match(&active_identity, &account_identity)
     });
 
     Ok(CodexAuthStatus {
@@ -2045,10 +2063,7 @@ pub fn list_accounts(home: &Path) -> Result<Vec<AccountMeta>> {
         let prefix = sha256_prefix(&acc_auth)?;
         let size = file_size(&acc_auth)?;
         let account_identity = auth_identity_keys(&acc_auth);
-        let identity_matches = !active_identity.is_empty()
-            && active_identity
-                .iter()
-                .any(|key| account_identity.iter().any(|account_key| account_key == key));
+        let identity_matches = identities_match(&active_identity, &account_identity);
         let is_active = active_prefix.as_ref() == Some(&prefix) || identity_matches;
 
         // Read meta.json
@@ -3109,6 +3124,62 @@ mod tests {
         let accounts = list_accounts(&home).unwrap();
         assert_eq!(accounts.len(), 1);
         assert_eq!(accounts[0].is_active, Some(true));
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    #[test]
+    fn detect_auth_prefers_account_id_over_shared_email() {
+        let home = temp_home("identity-account-id");
+        let personal_auth = r#"{
+            "auth_mode": "chatgpt",
+            "email": "same@example.com",
+            "tokens": {
+                "account_id": "acc_personal",
+                "access_token": "personal-access",
+                "refresh_token": "refresh"
+            }
+        }"#;
+        let team_auth = r#"{
+            "auth_mode": "chatgpt",
+            "email": "same@example.com",
+            "tokens": {
+                "account_id": "acc_team",
+                "access_token": "team-access",
+                "refresh_token": "refresh"
+            }
+        }"#;
+
+        let personal_dir = accounts_dir(&home).join("personal@example.com");
+        let team_dir = accounts_dir(&home).join("team@example.com");
+        std::fs::create_dir_all(&personal_dir).unwrap();
+        std::fs::create_dir_all(&team_dir).unwrap();
+        std::fs::write(personal_dir.join("auth.json"), personal_auth).unwrap();
+        std::fs::write(team_dir.join("auth.json"), team_auth).unwrap();
+        std::fs::write(auth_path(&home), team_auth.replace("team-access", "team-access-refreshed"))
+            .unwrap();
+
+        let status = detect_auth(
+            &home,
+            &[
+                "personal@example.com".to_string(),
+                "team@example.com".to_string(),
+            ],
+        )
+        .unwrap();
+        assert_eq!(status.status, "matched");
+        assert_eq!(status.matched_account.as_deref(), Some("team@example.com"));
+
+        let accounts = list_accounts(&home).unwrap();
+        let personal = accounts
+            .iter()
+            .find(|account| account.name == "personal@example.com")
+            .unwrap();
+        let team = accounts
+            .iter()
+            .find(|account| account.name == "team@example.com")
+            .unwrap();
+        assert_eq!(personal.is_active, Some(false));
+        assert_eq!(team.is_active, Some(true));
         let _ = std::fs::remove_dir_all(home);
     }
 
