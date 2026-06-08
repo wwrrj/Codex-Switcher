@@ -2591,6 +2591,12 @@ fn switch_account_inner(home: &Path, name: &str) -> Result<()> {
         return Err(anyhow::anyhow!("账号 '{}' 缺少 auth.json", name));
     }
 
+    let proxy_config = crate::proxy::load_proxy_config(home).unwrap_or_default();
+    if proxy_config.enabled {
+        crate::proxy::set_request_provider(home, Some(format!("account:{name}")))?;
+        return Ok(());
+    }
+
     close_codex_processes();
 
     // Backup then swap while Codex is not holding auth.json.
@@ -2809,6 +2815,7 @@ pub fn get_app_state(custom_home: Option<&str>) -> Result<AppState> {
         settings,
         switch_history: get_switch_history(&actual_home).unwrap_or_default(),
         scheduler: get_scheduler_state(&actual_home)?,
+        proxy_state: crate::proxy::get_proxy_state(&actual_home)?,
     })
 }
 

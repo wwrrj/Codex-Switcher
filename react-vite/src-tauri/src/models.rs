@@ -221,6 +221,191 @@ pub struct CodexAuthStatus {
     pub warning: Option<String>,
 }
 
+// ── Local proxy, routing providers & mobile residency ──
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderKind {
+    ChatGptOauth,
+    OpenAiApiKey,
+    OpenAiCompatible,
+    Glm,
+    Mimo,
+    DeepSeek,
+    CustomChatCompletions,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderHealthStatus {
+    Healthy,
+    CoolingDown,
+    Disabled,
+    Invalid,
+    Unknown,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderHealth {
+    pub status: ProviderHealthStatus,
+    pub last_error: Option<String>,
+    pub last_used_at: Option<String>,
+    pub cooldown_until: Option<String>,
+}
+
+impl Default for ProviderHealth {
+    fn default() -> Self {
+        Self {
+            status: ProviderHealthStatus::Unknown,
+            last_error: None,
+            last_used_at: None,
+            cooldown_until: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderConfig {
+    pub id: String,
+    pub name: String,
+    pub kind: ProviderKind,
+    pub enabled: bool,
+    pub base_url: String,
+    pub account_name: Option<String>,
+    pub api_key: Option<String>,
+    pub model_map: Option<std::collections::BTreeMap<String, String>>,
+    pub include_in_failover: bool,
+    #[serde(default)]
+    pub health: ProviderHealth,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PublicProviderConfig {
+    pub id: String,
+    pub name: String,
+    pub kind: ProviderKind,
+    pub enabled: bool,
+    pub base_url: String,
+    pub account_name: Option<String>,
+    pub has_secret: bool,
+    pub include_in_failover: bool,
+    pub health: ProviderHealth,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RoutingPolicy {
+    pub request_provider_id: Option<String>,
+    pub automatic_failover: bool,
+    pub max_retries: u8,
+    pub allow_third_party_failover: bool,
+    pub cooldown_seconds: u64,
+}
+
+impl Default for RoutingPolicy {
+    fn default() -> Self {
+        Self {
+            request_provider_id: None,
+            automatic_failover: false,
+            max_retries: 2,
+            allow_third_party_failover: false,
+            cooldown_seconds: 180,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MobileResidencyConfig {
+    pub enabled: bool,
+    pub account_name: Option<String>,
+    pub restore_on_startup: bool,
+    pub notify_on_error: bool,
+}
+
+impl Default for MobileResidencyConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            account_name: None,
+            restore_on_startup: true,
+            notify_on_error: true,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProxyConfig {
+    pub enabled: bool,
+    pub host: String,
+    pub port: u16,
+    pub upstream_base_url: String,
+    pub install_codex_config: bool,
+    pub routing: RoutingPolicy,
+    pub mobile_residency: MobileResidencyConfig,
+}
+
+impl Default for ProxyConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            host: "127.0.0.1".to_string(),
+            port: 14550,
+            upstream_base_url: "https://chatgpt.com/backend-api".to_string(),
+            install_codex_config: false,
+            routing: RoutingPolicy::default(),
+            mobile_residency: MobileResidencyConfig::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProxyRuntimeStatus {
+    Running,
+    Stopped,
+    Error,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FailoverEvent {
+    pub id: String,
+    pub time: String,
+    pub from_provider: String,
+    pub to_provider: Option<String>,
+    pub reason: String,
+    pub status_code: Option<u16>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MobileResidencyState {
+    pub enabled: bool,
+    pub account_name: Option<String>,
+    pub disk_account: Option<String>,
+    pub request_provider: Option<String>,
+    pub healthy: bool,
+    pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProxyState {
+    pub status: ProxyRuntimeStatus,
+    pub listen_url: Option<String>,
+    pub config: ProxyConfig,
+    pub request_provider: Option<PublicProviderConfig>,
+    pub providers: Vec<PublicProviderConfig>,
+    pub mobile_residency: MobileResidencyState,
+    pub recent_failovers: Vec<FailoverEvent>,
+    pub warnings: Vec<String>,
+}
+
 // ── App types ──
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -298,6 +483,7 @@ pub struct AppState {
     pub settings: AppSettings,
     pub switch_history: Vec<SwitchHistoryEntry>,
     pub scheduler: SchedulerState,
+    pub proxy_state: ProxyState,
 }
 
 // ── Smart quota scheduler ──

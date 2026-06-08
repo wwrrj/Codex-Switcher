@@ -130,6 +130,105 @@ export interface AuthTokenInfo {
   status: "missing" | "no_expiry_claim" | "valid" | "expiring_soon" | "expired" | string;
 }
 
+// ── Local proxy, providers & mobile residency ──
+
+export type ProviderKind =
+  | "chat_gpt_oauth"
+  | "open_ai_api_key"
+  | "open_ai_compatible"
+  | "glm"
+  | "mimo"
+  | "deep_seek"
+  | "custom_chat_completions";
+
+export type ProviderHealthStatus = "healthy" | "cooling_down" | "disabled" | "invalid" | "unknown";
+
+export interface ProviderHealth {
+  status: ProviderHealthStatus;
+  lastError?: string;
+  lastUsedAt?: string;
+  cooldownUntil?: string;
+}
+
+export interface ProviderConfig {
+  id: string;
+  name: string;
+  kind: ProviderKind;
+  enabled: boolean;
+  baseUrl: string;
+  accountName?: string;
+  apiKey?: string;
+  modelMap?: Record<string, string>;
+  includeInFailover: boolean;
+  health: ProviderHealth;
+}
+
+export interface PublicProviderConfig {
+  id: string;
+  name: string;
+  kind: ProviderKind;
+  enabled: boolean;
+  baseUrl: string;
+  accountName?: string;
+  hasSecret: boolean;
+  includeInFailover: boolean;
+  health: ProviderHealth;
+}
+
+export interface RoutingPolicy {
+  requestProviderId?: string;
+  automaticFailover: boolean;
+  maxRetries: number;
+  allowThirdPartyFailover: boolean;
+  cooldownSeconds: number;
+}
+
+export interface MobileResidencyConfig {
+  enabled: boolean;
+  accountName?: string;
+  restoreOnStartup: boolean;
+  notifyOnError: boolean;
+}
+
+export interface ProxyConfig {
+  enabled: boolean;
+  host: string;
+  port: number;
+  upstreamBaseUrl: string;
+  installCodexConfig: boolean;
+  routing: RoutingPolicy;
+  mobileResidency: MobileResidencyConfig;
+}
+
+export interface FailoverEvent {
+  id: string;
+  time: string;
+  fromProvider: string;
+  toProvider?: string;
+  reason: string;
+  statusCode?: number;
+}
+
+export interface MobileResidencyState {
+  enabled: boolean;
+  accountName?: string;
+  diskAccount?: string;
+  requestProvider?: string;
+  healthy: boolean;
+  warnings: string[];
+}
+
+export interface ProxyState {
+  status: "running" | "stopped" | "error";
+  listenUrl?: string;
+  config: ProxyConfig;
+  requestProvider?: PublicProviderConfig;
+  providers: PublicProviderConfig[];
+  mobileResidency: MobileResidencyState;
+  recentFailovers: FailoverEvent[];
+  warnings: string[];
+}
+
 export interface SwitchHistoryEntry {
   id: string;
   switchedAt: string;
@@ -307,6 +406,7 @@ export interface AppState {
   settings: AppSettings;
   switchHistory: SwitchHistoryEntry[];
   scheduler: SchedulerState;
+  proxyState: ProxyState;
 }
 
 export interface RefreshProgress {

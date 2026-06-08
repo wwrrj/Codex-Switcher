@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import { X, RotateCcw } from 'lucide-react'
 import { useAppStore } from '@/store/appStore'
 import { cn } from '@/lib/utils'
-import type { AppSettings } from '@/lib/types'
+import type { AppSettings, ProviderKind } from '@/lib/types'
 import SmartQuotaSchedulerPanel from './SmartQuotaSchedulerPanel'
 
 const defaultSettings: AppSettings = {
@@ -26,7 +26,24 @@ interface Props {
 export default function SettingsDrawer({ open, onClose }: Props) {
   const settings = useAppStore((s) => s.settings)
   const updateSettings = useAppStore((s) => s.updateSettings)
+  const accounts = useAppStore((s) => s.accounts)
+  const proxyState = useAppStore((s) => s.proxyState)
+  const updateProxyConfig = useAppStore((s) => s.updateProxyConfig)
+  const startProxy = useAppStore((s) => s.startProxy)
+  const stopProxy = useAppStore((s) => s.stopProxy)
+  const installProxyConfig = useAppStore((s) => s.installProxyConfig)
+  const restoreProxyConfig = useAppStore((s) => s.restoreProxyConfig)
+  const setRequestProvider = useAppStore((s) => s.setRequestProvider)
+  const setMobileResidencyAccount = useAppStore((s) => s.setMobileResidencyAccount)
+  const enableMobileResidency = useAppStore((s) => s.enableMobileResidency)
+  const disableMobileResidency = useAppStore((s) => s.disableMobileResidency)
+  const clearMobileResidency = useAppStore((s) => s.clearMobileResidency)
+  const restoreMobileResidency = useAppStore((s) => s.restoreMobileResidency)
   const [form, setForm] = useState<AppSettings>(settings)
+  const [providerKind, setProviderKind] = useState<ProviderKind>('deep_seek')
+  const [providerName, setProviderName] = useState('')
+  const [providerBaseUrl, setProviderBaseUrl] = useState('')
+  const [providerApiKey, setProviderApiKey] = useState('')
 
   useEffect(() => {
     if (open) setForm(settings)
@@ -48,6 +65,32 @@ export default function SettingsDrawer({ open, onClose }: Props) {
 
   const handleReset = () => {
     setForm({ ...defaultSettings })
+  }
+
+  const handleSaveProvider = async () => {
+    const fallbackBaseUrl: Record<ProviderKind, string> = {
+      chat_gpt_oauth: 'https://chatgpt.com/backend-api',
+      open_ai_api_key: 'https://api.openai.com/v1',
+      open_ai_compatible: 'https://example.com/v1',
+      glm: 'https://open.bigmodel.cn/api/paas/v4',
+      mimo: 'https://api.mimo.example/v1',
+      deep_seek: 'https://api.deepseek.com/v1',
+      custom_chat_completions: 'https://example.com/v1',
+    }
+    const name = providerName.trim() || providerKind
+    await useAppStore.getState().saveProvider({
+      id: '',
+      name,
+      kind: providerKind,
+      enabled: true,
+      baseUrl: providerBaseUrl.trim() || fallbackBaseUrl[providerKind],
+      apiKey: providerApiKey.trim() || undefined,
+      includeInFailover: true,
+      health: { status: 'unknown' },
+    })
+    setProviderName('')
+    setProviderBaseUrl('')
+    setProviderApiKey('')
   }
 
   if (!open) return null
@@ -133,6 +176,213 @@ export default function SettingsDrawer({ open, onClose }: Props) {
 
           <FieldGroup label="智能配额调度">
             <SmartQuotaSchedulerPanel />
+          </FieldGroup>
+
+          <FieldGroup label="本地代理">
+            <div className="rounded-lg border border-line bg-bg p-3 space-y-3">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-xs font-semibold text-fg">代理模式</p>
+                  <p className="text-[11px] text-fg-subtle mt-0.5">
+                    {proxyState.status === 'running' ? `运行中：${proxyState.listenUrl}` : '未运行'}
+                  </p>
+                </div>
+                <button
+                  onClick={() => void (proxyState.status === 'running' ? stopProxy() : startProxy())}
+                  className={cn(
+                    'px-3 py-1.5 rounded-md text-xs font-medium text-white transition-colors',
+                    proxyState.status === 'running' ? 'bg-warning hover:bg-warning/80' : 'bg-primary hover:bg-primary-hover'
+                  )}
+                >
+                  {proxyState.status === 'running' ? '停止代理' : '启动代理'}
+                </button>
+              </div>
+              <div className="flex gap-2">
+                <button
+                  onClick={() => void installProxyConfig()}
+                  className="px-3 py-1.5 rounded-md text-xs font-medium text-primary bg-primary-muted hover:bg-primary/15"
+                >
+                  接管 Codex 配置
+                </button>
+                <button
+                  onClick={() => void restoreProxyConfig()}
+                  className="px-3 py-1.5 rounded-md text-xs font-medium text-fg-muted bg-bg-elevated hover:bg-bg-hover"
+                >
+                  恢复配置
+                </button>
+              </div>
+              <label className="block">
+                <span className="text-[11px] text-fg-muted">当前请求出口</span>
+                <select
+                  value={proxyState.config.routing.requestProviderId ?? ''}
+                  onChange={(event) => void setRequestProvider(event.target.value || undefined)}
+                  className="mt-1 w-full px-2.5 py-1.5 rounded-md text-xs bg-bg-elevated border border-line text-fg focus:border-primary focus:outline-none"
+                >
+                  <option value="">默认当前账号</option>
+                  {proxyState.providers.map((provider) => (
+                    <option key={provider.id} value={provider.id}>
+                      {provider.name} · {provider.kind}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <div className="rounded-md bg-bg-elevated/60 border border-line-subtle px-3 py-2 space-y-2">
+                <ToggleRow
+                  label="自动故障转移"
+                  checked={proxyState.config.routing.automaticFailover}
+                  onChange={(value) => void updateProxyConfig({
+                    ...proxyState.config,
+                    routing: { ...proxyState.config.routing, automaticFailover: value },
+                  })}
+                />
+                <ToggleRow
+                  label="允许切到第三方后端"
+                  checked={proxyState.config.routing.allowThirdPartyFailover}
+                  onChange={(value) => void updateProxyConfig({
+                    ...proxyState.config,
+                    routing: { ...proxyState.config.routing, allowThirdPartyFailover: value },
+                  })}
+                />
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-fg-muted">最大重试</span>
+                  <input
+                    type="number"
+                    min={0}
+                    max={5}
+                    value={proxyState.config.routing.maxRetries}
+                    onChange={(event) => void updateProxyConfig({
+                      ...proxyState.config,
+                      routing: { ...proxyState.config.routing, maxRetries: Math.max(0, Math.min(5, parseInt(event.target.value) || 0)) },
+                    })}
+                    className="w-16 px-2 py-1 rounded-md text-xs bg-bg border border-line text-fg focus:border-primary focus:outline-none"
+                  />
+                  <span className="text-[10px] text-fg-subtle">次</span>
+                </div>
+              </div>
+            </div>
+          </FieldGroup>
+
+          <FieldGroup label="Relay / Plan 后端">
+            <div className="rounded-lg border border-line bg-bg p-3 space-y-3">
+              <div className="grid grid-cols-2 gap-2">
+                <select
+                  value={providerKind}
+                  onChange={(event) => setProviderKind(event.target.value as ProviderKind)}
+                  className="px-2.5 py-1.5 rounded-md text-xs bg-bg-elevated border border-line text-fg focus:border-primary focus:outline-none"
+                >
+                  <option value="open_ai_compatible">OpenAI Relay</option>
+                  <option value="glm">GLM Coding Plan</option>
+                  <option value="mimo">MiMo Token Plan</option>
+                  <option value="deep_seek">DeepSeek</option>
+                  <option value="custom_chat_completions">自定义 Chat Completions</option>
+                </select>
+                <input
+                  value={providerName}
+                  onChange={(event) => setProviderName(event.target.value)}
+                  placeholder="显示名称"
+                  className="px-2.5 py-1.5 rounded-md text-xs bg-bg-elevated border border-line text-fg placeholder:text-fg-subtle focus:border-primary focus:outline-none"
+                />
+              </div>
+              <input
+                value={providerBaseUrl}
+                onChange={(event) => setProviderBaseUrl(event.target.value)}
+                placeholder="Base URL，留空使用默认"
+                className="w-full px-2.5 py-1.5 rounded-md text-xs bg-bg-elevated border border-line text-fg placeholder:text-fg-subtle focus:border-primary focus:outline-none"
+              />
+              <input
+                value={providerApiKey}
+                onChange={(event) => setProviderApiKey(event.target.value)}
+                placeholder="API Key / Token（仅本地保存）"
+                type="password"
+                className="w-full px-2.5 py-1.5 rounded-md text-xs bg-bg-elevated border border-line text-fg placeholder:text-fg-subtle focus:border-primary focus:outline-none"
+              />
+              <button
+                onClick={() => void handleSaveProvider()}
+                className="px-3 py-1.5 rounded-md text-xs font-medium text-white bg-primary hover:bg-primary-hover"
+              >
+                添加后端
+              </button>
+              {proxyState.providers.filter((provider) => provider.kind !== 'chat_gpt_oauth').length > 0 && (
+                <div className="space-y-1.5 pt-1">
+                  {proxyState.providers.filter((provider) => provider.kind !== 'chat_gpt_oauth').map((provider) => (
+                    <div key={provider.id} className="flex items-center gap-2 rounded-md bg-bg-elevated/60 border border-line-subtle px-2.5 py-2">
+                      <span className="text-xs text-fg truncate">{provider.name}</span>
+                      <span className="text-[10px] text-fg-subtle">{provider.kind}</span>
+                      <span className="ml-auto text-[10px] text-fg-subtle">{provider.hasSecret ? '已保存密钥' : '无密钥'}</span>
+                      <button
+                        onClick={() => void useAppStore.getState().removeProvider(provider.id)}
+                        className="text-[10px] text-danger hover:bg-danger-muted rounded px-1.5 py-0.5"
+                      >
+                        删除
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </FieldGroup>
+
+          <FieldGroup label="移动端驻留">
+            <div className="rounded-lg border border-line bg-bg p-3 space-y-3">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-xs font-semibold text-fg">
+                    {proxyState.mobileResidency.enabled ? '已启用' : '未启用'}
+                  </p>
+                  <p className="text-[11px] text-fg-subtle mt-0.5">
+                    当前账号：{proxyState.mobileResidency.accountName ?? '未选择'}
+                  </p>
+                </div>
+                <button
+                  onClick={() => void (proxyState.mobileResidency.enabled ? disableMobileResidency() : enableMobileResidency())}
+                  className={cn(
+                    'px-3 py-1.5 rounded-md text-xs font-medium text-white',
+                    proxyState.mobileResidency.enabled ? 'bg-warning hover:bg-warning/80' : 'bg-primary hover:bg-primary-hover'
+                  )}
+                >
+                  {proxyState.mobileResidency.enabled ? '关闭驻留' : '启用驻留'}
+                </button>
+              </div>
+              <label className="block">
+                <span className="text-[11px] text-fg-muted">更换移动端驻留账号</span>
+                <select
+                  value={proxyState.mobileResidency.accountName ?? ''}
+                  onChange={(event) => {
+                    const account = event.target.value
+                    if (account) void setMobileResidencyAccount(account)
+                  }}
+                  className="mt-1 w-full px-2.5 py-1.5 rounded-md text-xs bg-bg-elevated border border-line text-fg focus:border-primary focus:outline-none"
+                >
+                  <option value="">请选择账号</option>
+                  {accounts.map((account) => (
+                    <option key={account.name} value={account.name}>
+                      {account.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              {proxyState.mobileResidency.warnings.length > 0 && (
+                <div className="rounded-md bg-warning-muted border border-warning/20 px-3 py-2 space-y-1">
+                  {proxyState.mobileResidency.warnings.map((warning) => (
+                    <p key={warning} className="text-[11px] text-warning">{warning}</p>
+                  ))}
+                </div>
+              )}
+              <div className="flex gap-2">
+                <button
+                  onClick={() => void restoreMobileResidency()}
+                  className="px-3 py-1.5 rounded-md text-xs font-medium text-primary bg-primary-muted hover:bg-primary/15"
+                >
+                  恢复驻留
+                </button>
+                <button
+                  onClick={() => void clearMobileResidency()}
+                  className="px-3 py-1.5 rounded-md text-xs font-medium text-danger hover:bg-danger-muted"
+                >
+                  清除驻留
+                </button>
+              </div>
+            </div>
           </FieldGroup>
 
           {/* Usage refresh interval */}

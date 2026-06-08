@@ -1,4 +1,4 @@
-import { RefreshCw, ArrowRightLeft, Pencil, Trash2, ExternalLink, AlertTriangle, Key, CheckCircle2, Calendar, Clock, Users, Activity, Star, Plus, ShieldCheck, ShieldAlert, History } from 'lucide-react'
+import { RefreshCw, ArrowRightLeft, Pencil, Trash2, ExternalLink, AlertTriangle, Key, CheckCircle2, Calendar, Clock, Users, Activity, Star, Plus, ShieldCheck, ShieldAlert, History, Smartphone, RadioTower } from 'lucide-react'
 import { useAppStore } from '@/store/appStore'
 import { getSmartSwitchRecommendation } from '@/lib/api'
 import UsageWindowCard from './UsageWindowCard'
@@ -26,6 +26,9 @@ export default function MainArea({ onRename, onDelete, onAddAccount }: Props) {
   const openSubDialog = useAppStore((s) => s.openSubscriptionOverrideDialog)
   const refreshAuth = useAppStore((s) => s.refreshAuth)
   const switchHistory = useAppStore((s) => s.switchHistory)
+  const proxyState = useAppStore((s) => s.proxyState)
+  const restoreMobileResidency = useAppStore((s) => s.restoreMobileResidency)
+  const setRequestProvider = useAppStore((s) => s.setRequestProvider)
 
   const account = accounts.find((a) => a.name === activeAccount) ?? null
   const hasAccount = account !== null
@@ -51,6 +54,9 @@ export default function MainArea({ onRename, onDelete, onAddAccount }: Props) {
   const autoTarget = recommendation?.account ?? null
   const health = account?.health ?? 'invalid'
   const healthHealthy = health === 'healthy'
+  const residency = proxyState.mobileResidency
+  const requestName = proxyState.requestProvider?.name ?? activeAccount ?? '—'
+  const diskName = residency.diskAccount ?? activeAccount ?? '—'
 
   return (
     <main data-component="MainArea" className="flex-1 overflow-y-auto min-w-0">
@@ -122,6 +128,66 @@ export default function MainArea({ onRename, onDelete, onAddAccount }: Props) {
         </div>
 
         {isRefreshingAll && <RefreshAllProgress />}
+
+        <div className={cn(
+          'rounded-xl border bg-bg-surface card-ring p-4',
+          residency.enabled && !residency.healthy ? 'border-warning/40 bg-warning-muted/40' : 'border-line'
+        )}>
+          <div className="flex items-start justify-between gap-3">
+            <div className="flex items-start gap-3 min-w-0">
+              <div className="w-9 h-9 rounded-lg bg-primary-muted text-primary flex items-center justify-center shrink-0">
+                <Smartphone className="w-4 h-4" />
+              </div>
+              <div className="min-w-0">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <h2 className="text-sm font-semibold text-fg font-serif">移动端驻留</h2>
+                  <span className={cn(
+                    'text-[10px] rounded-full px-2 py-0.5',
+                    proxyState.status === 'running' ? 'text-success bg-success-muted' : 'text-fg-muted bg-bg-elevated'
+                  )}>
+                    代理：{proxyState.status === 'running' ? '运行中' : '未运行'}
+                  </span>
+                </div>
+                <div className="grid grid-cols-3 gap-2 mt-2 text-[11px]">
+                  <ResidencyMetric label="移动端驻留" value={residency.enabled ? residency.accountName ?? '未选择' : '未启用'} />
+                  <ResidencyMetric label="磁盘账号" value={diskName} />
+                  <ResidencyMetric label="请求出口" value={requestName} />
+                </div>
+                {residency.enabled && residency.accountName && requestName !== residency.accountName && (
+                  <p className="text-[11px] text-primary mt-2">
+                    移动端驻留已启用：手机远程连接保持在 {residency.accountName}，请求出口当前为 {requestName}。
+                  </p>
+                )}
+                {residency.warnings.length > 0 && (
+                  <div className="mt-2 space-y-1">
+                    {residency.warnings.map((warning) => (
+                      <p key={warning} className="text-[11px] text-warning">{warning}</p>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+            <div className="flex gap-2 shrink-0">
+              {residency.enabled && !residency.healthy && (
+                <button
+                  onClick={() => void restoreMobileResidency()}
+                  className="px-2.5 py-1.5 rounded-md text-[11px] font-medium text-warning bg-warning-muted hover:bg-warning/20"
+                >
+                  恢复驻留
+                </button>
+              )}
+              {proxyState.config.enabled && account && (
+                <button
+                  onClick={() => void setRequestProvider(`account:${account.name}`)}
+                  className="px-2.5 py-1.5 rounded-md text-[11px] font-medium text-primary bg-primary-muted hover:bg-primary/15"
+                >
+                  <RadioTower className="inline w-3 h-3 mr-1" />
+                  设为请求出口
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
 
         {/* ── Two-column: Account Info + Usage ── */}
         <div className="grid grid-cols-5 gap-4">
@@ -416,6 +482,15 @@ function StatCard({ icon, label, value, hint, color }: {
         {value}
       </div>
       <p className="text-[10px] text-fg-subtle mt-0.5">{hint}</p>
+    </div>
+  )
+}
+
+function ResidencyMetric({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-lg bg-bg-elevated/60 border border-line-subtle px-2.5 py-2 min-w-0">
+      <p className="text-[10px] text-fg-subtle">{label}</p>
+      <p className="text-[11px] text-fg font-medium truncate mt-0.5" title={value}>{value}</p>
     </div>
   )
 }

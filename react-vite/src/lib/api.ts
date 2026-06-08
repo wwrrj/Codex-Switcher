@@ -1,6 +1,6 @@
 import { invoke } from '@tauri-apps/api/core'
 import { isPermissionGranted, requestPermission, sendNotification } from '@tauri-apps/plugin-notification'
-import type { AccountMeta, CodexAuthStatus, CodexUsageInfo, AppSettings, AppLog, AppState, SubscriptionInfo, SubscriptionPlan, TokenUsageSummary, NewAccountLoginPreparation, SwitchHistoryEntry, SwitchRecommendation, SchedulerConfig, SchedulerHistoryEntry, SchedulerState, ImportAccountsResult } from './types'
+import type { AccountMeta, CodexAuthStatus, CodexUsageInfo, AppSettings, AppLog, AppState, SubscriptionInfo, SubscriptionPlan, TokenUsageSummary, NewAccountLoginPreparation, SwitchHistoryEntry, SwitchRecommendation, SchedulerConfig, SchedulerHistoryEntry, SchedulerState, ImportAccountsResult, ProxyState, ProviderConfig, ProxyConfig } from './types'
 
 // ── Frontend-only log management ──
 
@@ -79,6 +79,88 @@ export async function listAccounts(): Promise<AccountMeta[]> {
 export async function switchAccount(name: string): Promise<void> {
   await invoke<void>('switch_account', { name })
   addLog('success', `已切换到账号「${name}」`)
+}
+
+export async function getProxyState(): Promise<ProxyState> {
+  return await invoke<ProxyState>('get_proxy_state')
+}
+
+export async function updateProxyConfig(config: ProxyConfig): Promise<ProxyState> {
+  const state = await invoke<ProxyState>('update_proxy_config', { config })
+  addLog('success', '代理配置已保存')
+  return state
+}
+
+export async function startProxy(): Promise<ProxyState> {
+  const state = await invoke<ProxyState>('start_proxy')
+  addLog('success', `本地代理已启动：${state.listenUrl ?? 'unknown'}`)
+  return state
+}
+
+export async function stopProxy(): Promise<ProxyState> {
+  const state = await invoke<ProxyState>('stop_proxy')
+  addLog('info', '本地代理已停止')
+  return state
+}
+
+export async function installCodexProxyConfig(): Promise<ProxyState> {
+  const state = await invoke<ProxyState>('install_codex_proxy_config')
+  addLog('success', '已接管 Codex 配置到本地代理')
+  return state
+}
+
+export async function restoreCodexProxyConfig(): Promise<ProxyState> {
+  const state = await invoke<ProxyState>('restore_codex_proxy_config')
+  addLog('info', '已恢复 Codex 原始配置')
+  return state
+}
+
+export async function setRequestProvider(providerId?: string): Promise<ProxyState> {
+  const state = await invoke<ProxyState>('set_request_provider', { providerId: providerId ?? null })
+  addLog('success', `当前请求出口已切换为：${state.requestProvider?.name ?? '默认账号'}`)
+  return state
+}
+
+export async function saveProvider(provider: ProviderConfig): Promise<ProxyState> {
+  const state = await invoke<ProxyState>('save_provider', { provider })
+  addLog('success', `已保存请求出口「${provider.name}」`)
+  return state
+}
+
+export async function removeProvider(providerId: string): Promise<ProxyState> {
+  const state = await invoke<ProxyState>('remove_provider', { providerId })
+  addLog('info', '已删除请求出口')
+  return state
+}
+
+export async function setMobileResidencyAccount(accountName: string): Promise<ProxyState> {
+  const state = await invoke<ProxyState>('set_mobile_residency_account', { accountName })
+  addLog('success', `已设置移动端驻留：${accountName}`)
+  return state
+}
+
+export async function enableMobileResidency(): Promise<ProxyState> {
+  const state = await invoke<ProxyState>('enable_mobile_residency')
+  addLog('success', '已启用移动端驻留')
+  return state
+}
+
+export async function disableMobileResidency(): Promise<ProxyState> {
+  const state = await invoke<ProxyState>('disable_mobile_residency')
+  addLog('info', '已关闭移动端驻留')
+  return state
+}
+
+export async function clearMobileResidency(): Promise<ProxyState> {
+  const state = await invoke<ProxyState>('clear_mobile_residency')
+  addLog('info', '已清除移动端驻留')
+  return state
+}
+
+export async function restoreMobileResidency(): Promise<ProxyState> {
+  const state = await invoke<ProxyState>('restore_mobile_residency')
+  addLog('success', '已恢复移动端驻留状态')
+  return state
 }
 
 export async function getSwitchHistory(): Promise<SwitchHistoryEntry[]> {

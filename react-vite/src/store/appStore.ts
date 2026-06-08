@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { AccountMeta, CodexAuthStatus, AppLog, AppSettings, RefreshProgress, ToastItem, SubscriptionPlan, CodexUsageInfo, DailyUsageEntry, TokenUsageSummary, SwitchHistoryEntry, SchedulerConfig, SchedulerState } from '@/lib/types'
+import type { AccountMeta, CodexAuthStatus, AppLog, AppSettings, RefreshProgress, ToastItem, SubscriptionPlan, CodexUsageInfo, DailyUsageEntry, TokenUsageSummary, SwitchHistoryEntry, SchedulerConfig, SchedulerState, ProxyState, ProviderConfig, ProxyConfig } from '@/lib/types'
 import * as api from '@/lib/api'
 import * as usageDb from '@/lib/usageDb'
 
@@ -34,6 +34,36 @@ const defaultSchedulerState: SchedulerState = {
   },
   history: [],
   shouldShowInvite: false,
+}
+
+const defaultProxyState: ProxyState = {
+  status: 'stopped',
+  config: {
+    enabled: false,
+    host: '127.0.0.1',
+    port: 14550,
+    upstreamBaseUrl: 'https://chatgpt.com/backend-api',
+    installCodexConfig: false,
+    routing: {
+      automaticFailover: false,
+      maxRetries: 2,
+      allowThirdPartyFailover: false,
+      cooldownSeconds: 180,
+    },
+    mobileResidency: {
+      enabled: false,
+      restoreOnStartup: true,
+      notifyOnError: true,
+    },
+  },
+  providers: [],
+  mobileResidency: {
+    enabled: false,
+    healthy: true,
+    warnings: [],
+  },
+  recentFailovers: [],
+  warnings: [],
 }
 
 function dateKeyFromIso(iso: string): string {
@@ -124,6 +154,7 @@ interface AppStore {
   tokenUsage: TokenUsageSummary | null
   switchHistory: SwitchHistoryEntry[]
   scheduler: SchedulerState
+  proxyState: ProxyState
 
   init: () => Promise<void>
   selectAccount: (name: string) => void
@@ -156,6 +187,20 @@ interface AppStore {
   runSchedulerOnce: () => Promise<void>
   dismissSchedulerInvite: (days?: number) => Promise<void>
   neverShowSchedulerInvite: () => Promise<void>
+  refreshProxyState: () => Promise<void>
+  updateProxyConfig: (config: ProxyConfig) => Promise<void>
+  startProxy: () => Promise<void>
+  stopProxy: () => Promise<void>
+  installProxyConfig: () => Promise<void>
+  restoreProxyConfig: () => Promise<void>
+  setRequestProvider: (providerId?: string) => Promise<void>
+  saveProvider: (provider: ProviderConfig) => Promise<void>
+  removeProvider: (providerId: string) => Promise<void>
+  setMobileResidencyAccount: (accountName: string) => Promise<void>
+  enableMobileResidency: () => Promise<void>
+  disableMobileResidency: () => Promise<void>
+  clearMobileResidency: () => Promise<void>
+  restoreMobileResidency: () => Promise<void>
 }
 
 export const useAppStore = create<AppStore>((set, get) => ({
@@ -191,6 +236,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
   tokenUsage: null,
   switchHistory: [],
   scheduler: defaultSchedulerState,
+  proxyState: defaultProxyState,
 
   init: async () => {
     set({ loading: true })
@@ -215,11 +261,18 @@ export const useAppStore = create<AppStore>((set, get) => ({
         theme: state.settings.theme,
         switchHistory: state.switchHistory,
         scheduler: state.scheduler,
+        proxyState: state.proxyState,
         tokenUsage: cachedTokenUsage,
         loading: false,
       })
       get().applyTheme(state.settings.theme)
       void get().refreshTokenUsage()
+      if (state.proxyState.config.enabled) {
+        void get().startProxy()
+      }
+      if (state.proxyState.config.mobileResidency.enabled && state.proxyState.config.mobileResidency.restoreOnStartup) {
+        void get().restoreMobileResidency()
+      }
       if (state.settings.enableUsageQuery && state.settings.refreshUsageOnStartup && state.accounts.length > 0) {
         void get().refreshAllUsage(true)
       }
@@ -243,12 +296,13 @@ export const useAppStore = create<AppStore>((set, get) => ({
         authStatus,
         activeAccount: name,
         selectedAccount: name,
+        proxyState: await api.getProxyState(),
         logs: api.getLogs(),
         switchTarget: null,
       })
       void api.refreshTrayMenu()
       void get().refreshSwitchHistory()
-      get().addToast('success', `已切换到账号「${name}」`)
+      get().addToast('success', get().proxyState.config.enabled ? `当前请求出口已切换为「${name}」` : `已切换到账号「${name}」`)
     } catch (e: unknown) {
       get().addToast('error', e instanceof Error ? e.message : '切换失败')
     } finally {
@@ -565,6 +619,135 @@ export const useAppStore = create<AppStore>((set, get) => ({
       ...get().scheduler.config,
       neverShowInvite: true,
     })
+  },
+
+  refreshProxyState: async () => {
+    try {
+      set({ proxyState: await api.getProxyState(), logs: api.getLogs() })
+    } catch (e: unknown) {
+      get().addToast('error', e instanceof Error ? e.message : '刷新代理状态失败')
+    }
+  },
+
+  updateProxyConfig: async (config) => {
+    try {
+      set({ proxyState: await api.updateProxyConfig(config), logs: api.getLogs() })
+    } catch (e: unknown) {
+      get().addToast('error', e instanceof Error ? e.message : '保存代理配置失败')
+    }
+  },
+
+  startProxy: async () => {
+    try {
+      set({ proxyState: await api.startProxy(), logs: api.getLogs() })
+      get().addToast('success', '本地代理已启动')
+    } catch (e: unknown) {
+      get().addToast('error', e instanceof Error ? e.message : '启动代理失败')
+    }
+  },
+
+  stopProxy: async () => {
+    try {
+      set({ proxyState: await api.stopProxy(), logs: api.getLogs() })
+      get().addToast('success', '本地代理已停止')
+    } catch (e: unknown) {
+      get().addToast('error', e instanceof Error ? e.message : '停止代理失败')
+    }
+  },
+
+  installProxyConfig: async () => {
+    try {
+      set({ proxyState: await api.installCodexProxyConfig(), logs: api.getLogs() })
+      get().addToast('success', '已接管 Codex 配置')
+    } catch (e: unknown) {
+      get().addToast('error', e instanceof Error ? e.message : '接管 Codex 配置失败')
+    }
+  },
+
+  restoreProxyConfig: async () => {
+    try {
+      set({ proxyState: await api.restoreCodexProxyConfig(), logs: api.getLogs() })
+      get().addToast('success', '已恢复 Codex 配置')
+    } catch (e: unknown) {
+      get().addToast('error', e instanceof Error ? e.message : '恢复 Codex 配置失败')
+    }
+  },
+
+  setRequestProvider: async (providerId) => {
+    try {
+      set({ proxyState: await api.setRequestProvider(providerId), logs: api.getLogs() })
+    } catch (e: unknown) {
+      get().addToast('error', e instanceof Error ? e.message : '切换请求出口失败')
+    }
+  },
+
+  saveProvider: async (provider) => {
+    try {
+      set({ proxyState: await api.saveProvider(provider), logs: api.getLogs() })
+      get().addToast('success', `已保存请求出口「${provider.name}」`)
+    } catch (e: unknown) {
+      get().addToast('error', e instanceof Error ? e.message : '保存请求出口失败')
+    }
+  },
+
+  removeProvider: async (providerId) => {
+    try {
+      set({ proxyState: await api.removeProvider(providerId), logs: api.getLogs() })
+      get().addToast('success', '已删除请求出口')
+    } catch (e: unknown) {
+      get().addToast('error', e instanceof Error ? e.message : '删除请求出口失败')
+    }
+  },
+
+  setMobileResidencyAccount: async (accountName) => {
+    try {
+      set({ proxyState: await api.setMobileResidencyAccount(accountName), logs: api.getLogs() })
+      get().addToast('success', `已设置移动端驻留：${accountName}`)
+    } catch (e: unknown) {
+      get().addToast('error', e instanceof Error ? e.message : '设置移动端驻留失败')
+    }
+  },
+
+  enableMobileResidency: async () => {
+    try {
+      const proxyState = await api.enableMobileResidency()
+      const accounts = await api.listAccounts()
+      const authStatus = await api.detectCodexAuth()
+      set({ proxyState, accounts, authStatus, activeAccount: authStatus.matchedAccount ?? get().activeAccount, logs: api.getLogs() })
+      get().addToast('success', '已启用移动端驻留')
+    } catch (e: unknown) {
+      get().addToast('error', e instanceof Error ? e.message : '启用移动端驻留失败')
+    }
+  },
+
+  disableMobileResidency: async () => {
+    try {
+      set({ proxyState: await api.disableMobileResidency(), logs: api.getLogs() })
+      get().addToast('success', '已关闭移动端驻留')
+    } catch (e: unknown) {
+      get().addToast('error', e instanceof Error ? e.message : '关闭移动端驻留失败')
+    }
+  },
+
+  clearMobileResidency: async () => {
+    try {
+      set({ proxyState: await api.clearMobileResidency(), logs: api.getLogs() })
+      get().addToast('success', '已清除移动端驻留')
+    } catch (e: unknown) {
+      get().addToast('error', e instanceof Error ? e.message : '清除移动端驻留失败')
+    }
+  },
+
+  restoreMobileResidency: async () => {
+    try {
+      const proxyState = await api.restoreMobileResidency()
+      const accounts = await api.listAccounts()
+      const authStatus = await api.detectCodexAuth()
+      set({ proxyState, accounts, authStatus, activeAccount: authStatus.matchedAccount ?? get().activeAccount, logs: api.getLogs() })
+      get().addToast('success', '已恢复移动端驻留状态')
+    } catch (e: unknown) {
+      get().addToast('error', e instanceof Error ? e.message : '恢复移动端驻留失败')
+    }
   },
 
   getSelectedAccountData: () => {

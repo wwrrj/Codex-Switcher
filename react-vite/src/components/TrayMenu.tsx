@@ -1,4 +1,4 @@
-import { ExternalLink, LogOut, RefreshCw, Sparkles } from 'lucide-react'
+import { ExternalLink, LogOut, RefreshCw, Sparkles, RadioTower, Smartphone } from 'lucide-react'
 import { emit } from '@tauri-apps/api/event'
 import { useLayoutEffect } from 'react'
 import { useAppStore } from '@/store/appStore'
@@ -11,6 +11,7 @@ export default function TrayMenu() {
   const activeAccount = useAppStore((state) => state.activeAccount)
   const switchingAccount = useAppStore((state) => state.switchingAccount)
   const switchToAccount = useAppStore((state) => state.switchToAccount)
+  const proxyState = useAppStore((state) => state.proxyState)
 
   useLayoutEffect(() => {
     document.documentElement.classList.add('tray-window')
@@ -56,6 +57,27 @@ export default function TrayMenu() {
             <IconButton title="退出程序" danger onClick={() => void api.quitApp()}>
               <LogOut className="w-3.5 h-3.5" />
             </IconButton>
+          </div>
+        </div>
+
+        <div className="px-3 py-2 border-b border-line-subtle grid grid-cols-2 gap-2 text-[10px]">
+          <div className="rounded-md bg-bg-elevated/60 border border-line-subtle px-2 py-1.5 min-w-0">
+            <p className="text-fg-subtle flex items-center gap-1">
+              <RadioTower className="w-3 h-3" />
+              请求出口
+            </p>
+            <p className="text-fg truncate mt-0.5" title={proxyState.requestProvider?.name ?? activeAccount ?? '—'}>
+              {shortName(proxyState.requestProvider?.name ?? activeAccount ?? '—', 16)}
+            </p>
+          </div>
+          <div className="rounded-md bg-bg-elevated/60 border border-line-subtle px-2 py-1.5 min-w-0">
+            <p className="text-fg-subtle flex items-center gap-1">
+              <Smartphone className="w-3 h-3" />
+              移动端驻留
+            </p>
+            <p className="text-fg truncate mt-0.5" title={proxyState.mobileResidency.accountName ?? '未启用'}>
+              {proxyState.mobileResidency.enabled ? shortName(proxyState.mobileResidency.accountName ?? '未选择', 16) : '未启用'}
+            </p>
           </div>
         </div>
 

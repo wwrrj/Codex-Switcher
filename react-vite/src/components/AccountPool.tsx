@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react'
-import { Plus, Users, Star, RefreshCw, ShieldAlert, Clock } from 'lucide-react'
+import { Plus, Users, Star, RefreshCw, ShieldAlert, Clock, Smartphone } from 'lucide-react'
 import { useAppStore } from '@/store/appStore'
 import { cn, formatResetTime, shortName } from '@/lib/utils'
 import SubscriptionBadge from './SubscriptionBadge'
@@ -15,6 +15,8 @@ export default function AccountPool({ onAddAccount }: Props) {
   const isRefreshingAll = useAppStore((s) => s.isRefreshingAll)
   const switchingAccount = useAppStore((s) => s.switchingAccount)
   const togglePriority = useAppStore((s) => s.togglePriority)
+  const proxyState = useAppStore((s) => s.proxyState)
+  const setMobileResidencyAccount = useAppStore((s) => s.setMobileResidencyAccount)
   const loading = useAppStore((s) => s.loading)
 
   const [confirmTarget, setConfirmTarget] = useState<string | null>(null)
@@ -107,6 +109,12 @@ export default function AccountPool({ onAddAccount }: Props) {
             const resetAt = usage5h?.resetAt
             const isConfirming = confirmTarget === acc.name
             const isPriority = !!acc.priority
+            const isResidency = proxyState.mobileResidency.accountName === acc.name
+            const supportsResidency = acc.subscription?.plan !== 'api_key'
+              && acc.health !== 'invalid'
+              && acc.health !== 'expired'
+              && acc.authTokens.some((token) => token.kind === 'access_token' && token.present)
+              && acc.authTokens.some((token) => token.kind === 'refresh_token' && token.present)
 
             return (
               <div key={acc.name} className="relative shrink-0">
@@ -198,10 +206,32 @@ export default function AccountPool({ onAddAccount }: Props) {
 
                   {/* Priority star — top right corner */}
                   {isPriority && (
-                    <div className="absolute top-2 right-2">
+                    <div className="absolute top-2 right-2 pointer-events-none">
                       <Star className="w-3 h-3 text-accent fill-accent/60" strokeWidth={2} />
                     </div>
                   )}
+                </button>
+
+                <button
+                  type="button"
+                  title={supportsResidency ? (isResidency ? '当前移动端驻留账号' : '设为移动端驻留') : '该账号不能作为移动端驻留账号。仅支持 ChatGPT OAuth 账号。'}
+                  disabled={!supportsResidency}
+                  onClick={(event) => {
+                    event.stopPropagation()
+                    if (!supportsResidency) return
+                    const ok = window.confirm(`启用移动端驻留后，Codex App 手机远程连接会保持在「${acc.name}」。是否继续？`)
+                    if (ok) void setMobileResidencyAccount(acc.name)
+                  }}
+                  className={cn(
+                    'absolute top-2 right-7 w-6 h-6 rounded-md flex items-center justify-center border transition-colors z-20',
+                    isResidency
+                      ? 'text-primary bg-primary-muted border-primary/30'
+                      : supportsResidency
+                        ? 'text-fg-muted bg-bg-elevated/80 border-line-subtle hover:text-primary hover:border-primary/30'
+                        : 'text-fg-subtle/40 bg-bg-elevated/40 border-line-subtle opacity-50 cursor-not-allowed'
+                  )}
+                >
+                  <Smartphone className="w-3.5 h-3.5" />
                 </button>
 
                 {/* Inline confirm switch */}

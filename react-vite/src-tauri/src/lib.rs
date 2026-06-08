@@ -1,6 +1,13 @@
+mod codex_config;
 mod commands;
 mod core;
+mod mobile_residency;
 mod models;
+mod providers;
+mod proxy;
+mod routing;
+mod secrets;
+mod transforms;
 mod tray;
 
 use commands::*;
@@ -66,6 +73,20 @@ pub fn run() {
             get_token_usage_summary,
             open_usage_page,
             save_active_account,
+            get_proxy_state,
+            update_proxy_config,
+            start_proxy,
+            stop_proxy,
+            set_request_provider,
+            save_provider,
+            remove_provider,
+            install_codex_proxy_config,
+            restore_codex_proxy_config,
+            set_mobile_residency_account,
+            enable_mobile_residency,
+            disable_mobile_residency,
+            clear_mobile_residency,
+            restore_mobile_residency,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

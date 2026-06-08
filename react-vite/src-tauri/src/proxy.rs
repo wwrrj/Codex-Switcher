@@ -1,0 +1,912 @@
+use anyhow::{Context, Result};
+use axum::body::{to_bytes, Body};
+use axum::extract::ws::{Message as AxumWsMessage, WebSocket, WebSocketUpgrade};
+use axum::extract::State;
+use axum::http::{HeaderMap, Method, Request, Response, StatusCode};
+use axum::response::IntoResponse;
+use axum::routing::any;
+use axum::Router;
+use bytes::Bytes;
+use chrono::Utc;
+use futures_util::TryStreamExt;
+use futures_util::{SinkExt, StreamExt};
+use once_cell::sync::Lazy;
+use reqwest::header::{HeaderName, HeaderValue, AUTHORIZATION, CONTENT_LENGTH, HOST};
+use std::net::SocketAddr;
+use std::path::{Path, PathBuf};
+use std::sync::Mutex;
+use tokio::sync::oneshot;
+use tokio_tungstenite::connect_async;
+use tokio_tungstenite::tungstenite::Message as TungsteniteMessage;
+
+use crate::codex_config;
+use crate::core;
+use crate::mobile_residency;
+use crate::models::*;
+use crate::providers;
+use crate::routing;
+use crate::secrets::sanitize_message;
+use crate::transforms;
+
+static RUNTIME: Lazy<Mutex<Option<ProxyRuntime>>> = Lazy::new(|| Mutex::new(None));
+
+struct ProxyRuntime {
+    listen_url: String,
+    shutdown: Option<oneshot::Sender<()>>,
+}
+
+#[derive(Clone)]
+struct ProxyAppState {
+    home: PathBuf,
+    client: reqwest::Client,
+}
+
+fn config_dir(home: &Path) -> PathBuf {
+    home.join("config")
+}
+
+fn proxy_config_file(home: &Path) -> PathBuf {
+    config_dir(home).join("proxy.json")
+}
+
+fn failovers_file(home: &Path) -> PathBuf {
+    config_dir(home).join("proxy_failovers.json")
+}
+
+fn read_json<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T> {
+    Ok(serde_json::from_str(&std::fs::read_to_string(path)?)?)
+}
+
+fn write_json<T: serde::Serialize>(path: &Path, value: &T) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(path, serde_json::to_string_pretty(value)?)?;
+    Ok(())
+}
+
+pub fn load_proxy_config(home: &Path) -> Result<ProxyConfig> {
+    let path = proxy_config_file(home);
+    if !path.exists() {
+        return Ok(ProxyConfig::default());
+    }
+    Ok(read_json(&path)?)
+}
+
+pub fn save_proxy_config(home: &Path, config: &ProxyConfig) -> Result<()> {
+    write_json(&proxy_config_file(home), config)
+}
+
+fn load_failovers(home: &Path) -> Vec<FailoverEvent> {
+    let path = failovers_file(home);
+    read_json(&path).unwrap_or_default()
+}
+
+fn append_failover(home: &Path, event: FailoverEvent) {
+    let mut events = load_failovers(home);
+    events.insert(0, event);
+    events.truncate(50);
+    let _ = write_json(&failovers_file(home), &events);
+}
+
+pub fn get_proxy_state(home: &Path) -> Result<ProxyState> {
+    let config = load_proxy_config(home)?;
+    let accounts = core::list_accounts(home).unwrap_or_default();
+    let providers = providers::merged_providers(home, &accounts)?;
+    let public_providers = providers
+        .iter()
+        .map(providers::public_provider)
+        .collect::<Vec<_>>();
+    let request_provider = config
+        .routing
+        .request_provider_id
+        .as_ref()
+        .and_then(|id| providers.iter().find(|item| &item.id == id))
+        .map(providers::public_provider);
+    let disk_account = accounts
+        .iter()
+        .find(|account| account.is_active == Some(true))
+        .map(|account| account.name.clone());
+    let request_provider_name = request_provider
+        .as_ref()
+        .map(|provider| provider.name.clone())
+        .or_else(|| disk_account.clone());
+    let mobile_residency = mobile_residency::mobile_residency_state(
+        home,
+        &config,
+        disk_account,
+        request_provider_name,
+    );
+    let runtime = RUNTIME.lock().ok().and_then(|guard| {
+        guard
+            .as_ref()
+            .map(|runtime| (runtime.listen_url.clone(), true))
+    });
+    let status = if runtime.is_some() {
+        ProxyRuntimeStatus::Running
+    } else if config.enabled {
+        ProxyRuntimeStatus::Stopped
+    } else {
+        ProxyRuntimeStatus::Stopped
+    };
+    let mut warnings = Vec::new();
+    if config.enabled && !runtime.as_ref().is_some_and(|(_, running)| *running) {
+        warnings.push("代理已启用但当前未运行".to_string());
+    }
+    if config.install_codex_config
+        && !codex_config::is_proxy_config_installed(home, &config.host, config.port)
+    {
+        warnings.push("Codex 配置尚未接管到本地代理".to_string());
+    }
+
+    Ok(ProxyState {
+        status,
+        listen_url: runtime.map(|(url, _)| url),
+        config,
+        request_provider,
+        providers: public_providers,
+        mobile_residency,
+        recent_failovers: load_failovers(home),
+        warnings,
+    })
+}
+
+pub async fn start_proxy(home: PathBuf) -> Result<ProxyState> {
+    let mut config = load_proxy_config(&home)?;
+    config.enabled = true;
+    save_proxy_config(&home, &config)?;
+
+    if RUNTIME.lock().unwrap().is_some() {
+        return get_proxy_state(&home);
+    }
+
+    let addr: SocketAddr = format!("{}:{}", config.host, config.port)
+        .parse()
+        .context("代理监听地址无效")?;
+    let state = ProxyAppState {
+        home: home.clone(),
+        client: reqwest::Client::new(),
+    };
+    let app = Router::new()
+        .route("/", any(proxy_handler))
+        .route("/*path", any(proxy_handler))
+        .with_state(state);
+    let listener = tokio::net::TcpListener::bind(addr)
+        .await
+        .with_context(|| format!("代理端口绑定失败: {}", addr))?;
+    let (tx, rx) = oneshot::channel();
+    let server = axum::serve(listener, app).with_graceful_shutdown(async {
+        let _ = rx.await;
+    });
+    tauri::async_runtime::spawn(async move {
+        if let Err(error) = server.await {
+            log::error!("proxy server stopped with error: {}", error);
+        }
+    });
+
+    let listen_url = format!("http://{}:{}", config.host, config.port);
+    *RUNTIME.lock().unwrap() = Some(ProxyRuntime {
+        listen_url,
+        shutdown: Some(tx),
+    });
+    get_proxy_state(&home)
+}
+
+pub fn stop_proxy(home: &Path) -> Result<ProxyState> {
+    if let Some(mut runtime) = RUNTIME.lock().unwrap().take() {
+        if let Some(shutdown) = runtime.shutdown.take() {
+            let _ = shutdown.send(());
+        }
+    }
+    let mut config = load_proxy_config(home)?;
+    config.enabled = false;
+    save_proxy_config(home, &config)?;
+    get_proxy_state(home)
+}
+
+pub fn set_request_provider(home: &Path, provider_id: Option<String>) -> Result<ProxyState> {
+    let mut config = load_proxy_config(home)?;
+    config.routing.request_provider_id = provider_id;
+    save_proxy_config(home, &config)?;
+    get_proxy_state(home)
+}
+
+pub fn save_provider(home: &Path, provider: ProviderConfig) -> Result<ProxyState> {
+    providers::save_provider(home, provider)?;
+    get_proxy_state(home)
+}
+
+pub fn remove_provider(home: &Path, provider_id: &str) -> Result<ProxyState> {
+    providers::remove_provider(home, provider_id)?;
+    get_proxy_state(home)
+}
+
+pub fn install_codex_proxy_config(home: &Path) -> Result<ProxyState> {
+    let mut config = load_proxy_config(home)?;
+    codex_config::install_proxy_config(home, &config.host, config.port)?;
+    config.install_codex_config = true;
+    save_proxy_config(home, &config)?;
+    get_proxy_state(home)
+}
+
+pub fn restore_codex_proxy_config(home: &Path) -> Result<ProxyState> {
+    let mut config = load_proxy_config(home)?;
+    let _ = codex_config::restore_proxy_config(home)?;
+    config.install_codex_config = false;
+    save_proxy_config(home, &config)?;
+    get_proxy_state(home)
+}
+
+pub fn set_mobile_residency_account(home: &Path, account_name: String) -> Result<ProxyState> {
+    mobile_residency::validate_mobile_residency_account(home, &account_name)?;
+    let mut config = load_proxy_config(home)?;
+    config.mobile_residency.account_name = Some(account_name);
+    save_proxy_config(home, &config)?;
+    get_proxy_state(home)
+}
+
+pub fn enable_mobile_residency(home: &Path) -> Result<ProxyState> {
+    let mut config = load_proxy_config(home)?;
+    let account = config
+        .mobile_residency
+        .account_name
+        .clone()
+        .ok_or_else(|| anyhow::anyhow!("请先选择移动端驻留账号"))?;
+    mobile_residency::restore_mobile_residency_auth(home, &account)?;
+    config.mobile_residency.enabled = true;
+    save_proxy_config(home, &config)?;
+    get_proxy_state(home)
+}
+
+pub fn disable_mobile_residency(home: &Path) -> Result<ProxyState> {
+    let mut config = load_proxy_config(home)?;
+    config.mobile_residency.enabled = false;
+    save_proxy_config(home, &config)?;
+    get_proxy_state(home)
+}
+
+pub fn clear_mobile_residency(home: &Path) -> Result<ProxyState> {
+    let mut config = load_proxy_config(home)?;
+    config.mobile_residency.enabled = false;
+    config.mobile_residency.account_name = None;
+    save_proxy_config(home, &config)?;
+    get_proxy_state(home)
+}
+
+pub fn restore_mobile_residency(home: &Path) -> Result<ProxyState> {
+    let config = load_proxy_config(home)?;
+    let account = config
+        .mobile_residency
+        .account_name
+        .clone()
+        .ok_or_else(|| anyhow::anyhow!("未选择移动端驻留账号"))?;
+    mobile_residency::restore_mobile_residency_auth(home, &account)?;
+    get_proxy_state(home)
+}
+
+async fn proxy_handler(
+    State(state): State<ProxyAppState>,
+    ws: Option<WebSocketUpgrade>,
+    req: Request<Body>,
+) -> impl IntoResponse {
+    if let Some(ws) = ws {
+        return ws
+            .on_upgrade(move |socket| async move {
+                if let Err(error) = proxy_websocket(state, socket, req).await {
+                    log::warn!(
+                        "websocket proxy failed: {}",
+                        sanitize_message(&error.to_string())
+                    );
+                }
+            })
+            .into_response();
+    }
+    match proxy_request(state, req).await {
+        Ok(response) => response,
+        Err(error) => response_with_status(
+            StatusCode::BAD_GATEWAY,
+            format!("代理请求失败：{}", sanitize_message(&error.to_string())),
+        ),
+    }
+}
+
+async fn proxy_websocket(
+    state: ProxyAppState,
+    client_socket: WebSocket,
+    req: Request<Body>,
+) -> Result<()> {
+    let config = load_proxy_config(&state.home)?;
+    let accounts = core::list_accounts(&state.home).unwrap_or_default();
+    let providers = providers::merged_providers(&state.home, &accounts)?;
+    let provider = routing::choose_provider(&providers, &config.routing, &[])
+        .map(|decision| decision.provider)
+        .ok_or_else(|| anyhow::anyhow!("没有可用 WebSocket 请求出口"))?;
+    let uri = req.uri().clone();
+    let path = uri.path().to_string();
+    let query = uri.query().map(str::to_string);
+    let mut url = upstream_url(&provider, &path, query.as_deref());
+    if url.starts_with("https://") {
+        url = url.replacen("https://", "wss://", 1);
+    } else if url.starts_with("http://") {
+        url = url.replacen("http://", "ws://", 1);
+    }
+
+    let mut request =
+        tokio_tungstenite::tungstenite::handshake::client::Request::builder().uri(url);
+    if let Some(auth) = provider_auth_header(&state.home, &provider)? {
+        request = request.header("authorization", auth);
+    }
+    let request = request.body(())?;
+    let (upstream_socket, _) = connect_async(request).await?;
+    let (mut upstream_write, mut upstream_read) = upstream_socket.split();
+    let (mut client_write, mut client_read) = client_socket.split();
+
+    let client_to_upstream = async {
+        while let Some(message) = client_read.next().await {
+            let message = message?;
+            upstream_write.send(axum_to_tungstenite(message)).await?;
+        }
+        Result::<()>::Ok(())
+    };
+    let upstream_to_client = async {
+        while let Some(message) = upstream_read.next().await {
+            let message = message?;
+            client_write.send(tungstenite_to_axum(message)).await?;
+        }
+        Result::<()>::Ok(())
+    };
+
+    tokio::select! {
+        result = client_to_upstream => result,
+        result = upstream_to_client => result,
+    }
+}
+
+fn axum_to_tungstenite(message: AxumWsMessage) -> TungsteniteMessage {
+    match message {
+        AxumWsMessage::Text(text) => TungsteniteMessage::Text(text),
+        AxumWsMessage::Binary(bytes) => TungsteniteMessage::Binary(bytes),
+        AxumWsMessage::Ping(bytes) => TungsteniteMessage::Ping(bytes),
+        AxumWsMessage::Pong(bytes) => TungsteniteMessage::Pong(bytes),
+        AxumWsMessage::Close(frame) => TungsteniteMessage::Close(frame.map(|frame| {
+            tokio_tungstenite::tungstenite::protocol::CloseFrame {
+                code: frame.code.into(),
+                reason: frame.reason,
+            }
+        })),
+    }
+}
+
+fn tungstenite_to_axum(message: TungsteniteMessage) -> AxumWsMessage {
+    match message {
+        TungsteniteMessage::Text(text) => AxumWsMessage::Text(text),
+        TungsteniteMessage::Binary(bytes) => AxumWsMessage::Binary(bytes),
+        TungsteniteMessage::Ping(bytes) => AxumWsMessage::Ping(bytes),
+        TungsteniteMessage::Pong(bytes) => AxumWsMessage::Pong(bytes),
+        TungsteniteMessage::Close(frame) => {
+            AxumWsMessage::Close(frame.map(|frame| axum::extract::ws::CloseFrame {
+                code: frame.code.into(),
+                reason: frame.reason,
+            }))
+        }
+        TungsteniteMessage::Frame(_) => AxumWsMessage::Close(None),
+    }
+}
+
+async fn proxy_request(state: ProxyAppState, req: Request<Body>) -> Result<Response<Body>> {
+    let (parts, body) = req.into_parts();
+    let method = parts.method;
+    let uri = parts.uri;
+    let headers = parts.headers;
+    let path = uri.path().to_string();
+    let query = uri.query().map(str::to_string);
+    let body_bytes = to_bytes(body, 20 * 1024 * 1024)
+        .await
+        .context("读取请求体失败")?;
+
+    if path.ends_with("/models") || path == "/v1/models" {
+        let config = load_proxy_config(&state.home)?;
+        let accounts = core::list_accounts(&state.home).unwrap_or_default();
+        let providers = providers::merged_providers(&state.home, &accounts)?;
+        let provider = routing::choose_provider(&providers, &config.routing, &[])
+            .map(|decision| decision.provider)
+            .or_else(|| providers.into_iter().next())
+            .ok_or_else(|| anyhow::anyhow!("没有可用请求出口"))?;
+        let models = provider
+            .model_map
+            .as_ref()
+            .map(|map| map.values().cloned().collect::<Vec<_>>())
+            .unwrap_or_else(|| vec!["gpt-4.1".to_string(), "gpt-4.1-mini".to_string()]);
+        let value = transforms::synthetic_models_response(&provider.name, &models);
+        return Ok(json_response(StatusCode::OK, value));
+    }
+
+    let mut attempted = Vec::new();
+    let mut last_error: Option<anyhow::Error> = None;
+    let config = load_proxy_config(&state.home)?;
+    let max_attempts = if config.routing.automatic_failover {
+        config.routing.max_retries.saturating_add(1)
+    } else {
+        1
+    };
+
+    for attempt_idx in 0..max_attempts {
+        let accounts = core::list_accounts(&state.home).unwrap_or_default();
+        let provider_list = providers::merged_providers(&state.home, &accounts)?;
+        let Some(decision) = routing::choose_provider(&provider_list, &config.routing, &attempted)
+        else {
+            break;
+        };
+        let provider = decision.provider;
+        attempted.push(provider.id.clone());
+
+        match forward_once(
+            &state,
+            &provider,
+            &method,
+            &path,
+            query.as_deref(),
+            &headers,
+            body_bytes.clone(),
+        )
+        .await
+        {
+            Ok(response) => {
+                let _ = providers::mark_provider_used(&state.home, &provider.id);
+                return Ok(response);
+            }
+            Err(error) => {
+                let reason = sanitize_message(&error.to_string());
+                providers::mark_provider_failure(
+                    &state.home,
+                    &provider.id,
+                    &reason,
+                    config.routing.cooldown_seconds,
+                )
+                .ok();
+                record_failover(&state.home, &provider, None, &reason, None, &config);
+                last_error = Some(error);
+                if attempt_idx + 1 < max_attempts {
+                    continue;
+                }
+            }
+        }
+    }
+
+    Err(last_error.unwrap_or_else(|| anyhow::anyhow!("没有可用请求出口")))
+}
+
+fn record_failover(
+    home: &Path,
+    from: &ProviderConfig,
+    to: Option<&ProviderConfig>,
+    reason: &str,
+    status_code: Option<u16>,
+    config: &ProxyConfig,
+) {
+    providers::mark_provider_failure(home, &from.id, reason, config.routing.cooldown_seconds).ok();
+    append_failover(
+        home,
+        FailoverEvent {
+            id: uuid::Uuid::new_v4().to_string(),
+            time: Utc::now().to_rfc3339(),
+            from_provider: from.name.clone(),
+            to_provider: to.map(|provider| provider.name.clone()),
+            reason: sanitize_message(reason),
+            status_code,
+        },
+    );
+}
+
+async fn forward_once(
+    state: &ProxyAppState,
+    provider: &ProviderConfig,
+    method: &Method,
+    path: &str,
+    query: Option<&str>,
+    headers: &HeaderMap,
+    body: Bytes,
+) -> Result<Response<Body>> {
+    let upstream_url = upstream_url(provider, path, query);
+    let mut upstream_body = body;
+    let mut url = upstream_url;
+    let mut transform_chat_stream = false;
+    if is_chat_completion_provider(provider) && path.ends_with("/responses") {
+        let json: serde_json::Value =
+            serde_json::from_slice(&upstream_body).context("解析 Responses 请求失败")?;
+        let requested_model = json
+            .get("model")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("gpt-4.1");
+        let model = transforms::mapped_model(requested_model, &provider.model_map);
+        upstream_body = Bytes::from(serde_json::to_vec(
+            &transforms::responses_to_chat_completions(json, Some(&model)),
+        )?);
+        url = join_url(&provider.base_url, "/chat/completions", query);
+        transform_chat_stream = true;
+    }
+
+    let req_method = reqwest::Method::from_bytes(method.as_str().as_bytes())?;
+    let mut builder = state.client.request(req_method, url);
+    for (name, value) in headers {
+        if name == HOST || name == CONTENT_LENGTH || name == AUTHORIZATION {
+            continue;
+        }
+        if let (Ok(header_name), Ok(header_value)) = (
+            HeaderName::from_bytes(name.as_str().as_bytes()),
+            HeaderValue::from_bytes(value.as_bytes()),
+        ) {
+            builder = builder.header(header_name, header_value);
+        }
+    }
+    if let Some(auth) = provider_auth_header(&state.home, provider)? {
+        builder = builder.header(AUTHORIZATION, auth);
+    }
+    let upstream = builder.body(upstream_body).send().await?;
+    let status = upstream.status();
+    let headers = upstream.headers().clone();
+    let is_sse = headers
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.contains("text/event-stream"));
+
+    if !status.is_success() {
+        let status_u16 = status.as_u16();
+        let body = upstream.text().await.unwrap_or_default();
+        let kind = routing::classify_failure(Some(status_u16), &body)
+            .unwrap_or(routing::FailureKind::Unknown);
+        return Err(anyhow::anyhow!(
+            "{}: HTTP {}",
+            routing::failure_reason(&kind),
+            status_u16
+        ));
+    }
+
+    if !is_sse {
+        let status_code = StatusCode::from_u16(status.as_u16())?;
+        let body = upstream.bytes().await?;
+        let body_text = String::from_utf8_lossy(&body);
+        if let Some(kind) = routing::classify_failure(Some(status.as_u16()), &body_text) {
+            return Err(anyhow::anyhow!("{}", routing::failure_reason(&kind)));
+        }
+        return response_from_parts(status_code, headers, Body::from(body));
+    }
+
+    response_from_reqwest(upstream, transform_chat_stream).await
+}
+
+fn provider_auth_header(home: &Path, provider: &ProviderConfig) -> Result<Option<String>> {
+    match provider.kind {
+        ProviderKind::ChatGptOauth => {
+            let account = provider
+                .account_name
+                .as_deref()
+                .ok_or_else(|| anyhow::anyhow!("OAuth Provider 缺少账号名"))?;
+            let token = providers::read_access_token_for_account(home, account)?;
+            Ok(Some(format!("Bearer {token}")))
+        }
+        _ => Ok(provider
+            .api_key
+            .as_ref()
+            .filter(|key| !key.is_empty())
+            .map(|key| format!("Bearer {key}"))),
+    }
+}
+
+fn is_chat_completion_provider(provider: &ProviderConfig) -> bool {
+    matches!(
+        provider.kind,
+        ProviderKind::Glm
+            | ProviderKind::Mimo
+            | ProviderKind::DeepSeek
+            | ProviderKind::CustomChatCompletions
+    )
+}
+
+fn upstream_url(provider: &ProviderConfig, path: &str, query: Option<&str>) -> String {
+    match provider.kind {
+        ProviderKind::ChatGptOauth => {
+            let stripped = path.strip_prefix("/backend-api").unwrap_or(path);
+            join_url(&provider.base_url, stripped, query)
+        }
+        _ => {
+            let stripped = path.strip_prefix("/v1").unwrap_or(path);
+            join_url(&provider.base_url, stripped, query)
+        }
+    }
+}
+
+fn join_url(base: &str, path: &str, query: Option<&str>) -> String {
+    let base = base.trim_end_matches('/');
+    let path = if path.starts_with('/') {
+        path.to_string()
+    } else {
+        format!("/{path}")
+    };
+    let mut url = format!("{base}{path}");
+    if let Some(query) = query {
+        url.push('?');
+        url.push_str(query);
+    }
+    url
+}
+
+async fn response_from_reqwest(
+    upstream: reqwest::Response,
+    transform_chat_stream: bool,
+) -> Result<Response<Body>> {
+    let status = StatusCode::from_u16(upstream.status().as_u16())?;
+    let headers = upstream.headers().clone();
+    let is_sse = headers
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.contains("text/event-stream"));
+    let mut builder = Response::builder().status(status);
+    for (name, value) in &headers {
+        if name == reqwest::header::CONTENT_LENGTH || name == reqwest::header::TRANSFER_ENCODING {
+            continue;
+        }
+        builder = builder.header(name.as_str(), value.as_bytes());
+    }
+    if is_sse {
+        if transform_chat_stream {
+            let stream = upstream
+                .bytes_stream()
+                .map_ok(|bytes| {
+                    let text = String::from_utf8_lossy(&bytes);
+                    let converted = text
+                        .lines()
+                        .filter_map(transforms::chat_completion_chunk_to_responses_sse)
+                        .collect::<String>();
+                    Bytes::from(converted)
+                })
+                .map_err(|error| std::io::Error::new(std::io::ErrorKind::Other, error));
+            return Ok(builder
+                .header("content-type", "text/event-stream")
+                .body(Body::from_stream(stream))?);
+        }
+        let stream = upstream
+            .bytes_stream()
+            .map_err(|error| std::io::Error::new(std::io::ErrorKind::Other, error));
+        return Ok(builder.body(Body::from_stream(stream))?);
+    }
+    let bytes = upstream.bytes().await?;
+    Ok(builder.body(Body::from(bytes))?)
+}
+
+fn response_from_parts(
+    status: StatusCode,
+    headers: reqwest::header::HeaderMap,
+    body: Body,
+) -> Result<Response<Body>> {
+    let mut builder = Response::builder().status(status);
+    for (name, value) in &headers {
+        if name == reqwest::header::CONTENT_LENGTH || name == reqwest::header::TRANSFER_ENCODING {
+            continue;
+        }
+        builder = builder.header(name.as_str(), value.as_bytes());
+    }
+    Ok(builder.body(body)?)
+}
+
+fn response_with_status(status: StatusCode, body: String) -> Response<Body> {
+    Response::builder()
+        .status(status)
+        .header("content-type", "text/plain; charset=utf-8")
+        .body(Body::from(body))
+        .unwrap()
+}
+
+fn json_response(status: StatusCode, value: serde_json::Value) -> Response<Body> {
+    Response::builder()
+        .status(status)
+        .header("content-type", "application/json")
+        .body(Body::from(value.to_string()))
+        .unwrap()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::routing::post;
+    use axum::Json;
+    use once_cell::sync::Lazy;
+
+    static TEST_PROXY_MUTEX: Lazy<tokio::sync::Mutex<()>> =
+        Lazy::new(|| tokio::sync::Mutex::new(()));
+
+    #[test]
+    fn builds_chatgpt_backend_url() {
+        let provider = ProviderConfig {
+            id: "p".to_string(),
+            name: "p".to_string(),
+            kind: ProviderKind::ChatGptOauth,
+            enabled: true,
+            base_url: "https://chatgpt.com/backend-api".to_string(),
+            account_name: Some("a".to_string()),
+            api_key: None,
+            model_map: None,
+            include_in_failover: true,
+            health: ProviderHealth::default(),
+        };
+        assert_eq!(
+            upstream_url(&provider, "/backend-api/wham/usage", None),
+            "https://chatgpt.com/backend-api/wham/usage"
+        );
+    }
+
+    #[test]
+    fn builds_openai_compatible_url() {
+        let provider = ProviderConfig {
+            id: "p".to_string(),
+            name: "p".to_string(),
+            kind: ProviderKind::DeepSeek,
+            enabled: true,
+            base_url: "https://api.deepseek.com/v1".to_string(),
+            account_name: None,
+            api_key: Some("sk".to_string()),
+            model_map: None,
+            include_in_failover: true,
+            health: ProviderHealth::default(),
+        };
+        assert_eq!(
+            upstream_url(&provider, "/v1/models", Some("a=1")),
+            "https://api.deepseek.com/v1/models?a=1"
+        );
+    }
+
+    fn temp_home(name: &str) -> PathBuf {
+        let path = std::env::temp_dir().join(format!(
+            "codex-switcher-proxy-test-{}-{}",
+            name,
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ));
+        std::fs::create_dir_all(&path).unwrap();
+        path
+    }
+
+    async fn start_mock_upstream(status: StatusCode) -> String {
+        async fn handler(
+            State(status): State<StatusCode>,
+            Json(_body): Json<serde_json::Value>,
+        ) -> impl IntoResponse {
+            if status == StatusCode::OK {
+                Json(serde_json::json!({
+                    "choices": [
+                        { "message": { "content": "ok" }, "finish_reason": "stop" }
+                    ]
+                }))
+                .into_response()
+            } else {
+                (status, "quota exhausted").into_response()
+            }
+        }
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let app = Router::new()
+            .route("/v1/chat/completions", post(handler))
+            .with_state(status);
+        tauri::async_runtime::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        format!("http://{}", addr)
+    }
+
+    async fn available_port() -> u16 {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        listener.local_addr().unwrap().port()
+    }
+
+    #[tokio::test]
+    async fn proxy_forwards_responses_to_chat_completions_provider() {
+        let _guard = TEST_PROXY_MUTEX.lock().await;
+        let home = temp_home("forward");
+        let upstream = start_mock_upstream(StatusCode::OK).await;
+        let port = available_port().await;
+        save_proxy_config(
+            &home,
+            &ProxyConfig {
+                enabled: true,
+                port,
+                routing: RoutingPolicy {
+                    request_provider_id: Some("provider:test".to_string()),
+                    allow_third_party_failover: true,
+                    ..RoutingPolicy::default()
+                },
+                ..ProxyConfig::default()
+            },
+        )
+        .unwrap();
+        providers::save_provider(
+            &home,
+            ProviderConfig {
+                id: "provider:test".to_string(),
+                name: "Mock".to_string(),
+                kind: ProviderKind::CustomChatCompletions,
+                enabled: true,
+                base_url: format!("{}/v1", upstream),
+                account_name: None,
+                api_key: Some("sk-test".to_string()),
+                model_map: None,
+                include_in_failover: true,
+                health: ProviderHealth {
+                    status: ProviderHealthStatus::Healthy,
+                    ..ProviderHealth::default()
+                },
+            },
+        )
+        .unwrap();
+
+        let state = start_proxy(home.clone()).await.unwrap();
+        let response = reqwest::Client::new()
+            .post(format!("{}/v1/responses", state.listen_url.unwrap()))
+            .json(&serde_json::json!({ "model": "gpt-4.1", "input": "hello", "stream": false }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), reqwest::StatusCode::OK);
+        assert!(response.text().await.unwrap().contains("ok"));
+        stop_proxy(&home).unwrap();
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    #[tokio::test]
+    async fn proxy_failovers_after_quota_response() {
+        let _guard = TEST_PROXY_MUTEX.lock().await;
+        let home = temp_home("failover");
+        let bad = start_mock_upstream(StatusCode::TOO_MANY_REQUESTS).await;
+        let good = start_mock_upstream(StatusCode::OK).await;
+        let port = available_port().await;
+        save_proxy_config(
+            &home,
+            &ProxyConfig {
+                enabled: true,
+                port,
+                routing: RoutingPolicy {
+                    request_provider_id: Some("provider:bad".to_string()),
+                    automatic_failover: true,
+                    max_retries: 2,
+                    allow_third_party_failover: true,
+                    ..RoutingPolicy::default()
+                },
+                ..ProxyConfig::default()
+            },
+        )
+        .unwrap();
+        for (id, base_url) in [("provider:bad", bad), ("provider:good", good)] {
+            providers::save_provider(
+                &home,
+                ProviderConfig {
+                    id: id.to_string(),
+                    name: id.to_string(),
+                    kind: ProviderKind::CustomChatCompletions,
+                    enabled: true,
+                    base_url: format!("{}/v1", base_url),
+                    account_name: None,
+                    api_key: Some("sk-test".to_string()),
+                    model_map: None,
+                    include_in_failover: true,
+                    health: ProviderHealth {
+                        status: ProviderHealthStatus::Healthy,
+                        ..ProviderHealth::default()
+                    },
+                },
+            )
+            .unwrap();
+        }
+
+        let state = start_proxy(home.clone()).await.unwrap();
+        let response = reqwest::Client::new()
+            .post(format!("{}/v1/responses", state.listen_url.unwrap()))
+            .json(&serde_json::json!({ "model": "gpt-4.1", "input": "hello", "stream": false }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), reqwest::StatusCode::OK);
+        assert!(response.text().await.unwrap().contains("ok"));
+        assert!(!load_failovers(&home).is_empty());
+        stop_proxy(&home).unwrap();
+        let _ = std::fs::remove_dir_all(home);
+    }
+}

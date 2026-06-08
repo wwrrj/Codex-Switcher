@@ -307,3 +307,130 @@ pub async fn save_active_account() -> Result<String, String> {
     // This is a convenience command that just confirms the current state is saved
     Ok("已保存当前账号状态".to_string())
 }
+
+#[tauri::command]
+pub async fn get_proxy_state() -> Result<ProxyState, String> {
+    blocking(move || {
+        let actual_home = actual_home()?;
+        crate::proxy::get_proxy_state(&actual_home).map_err(|e| e.to_string())
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn update_proxy_config(config: ProxyConfig) -> Result<ProxyState, String> {
+    blocking(move || {
+        let actual_home = actual_home()?;
+        crate::proxy::save_proxy_config(&actual_home, &config).map_err(|e| e.to_string())?;
+        crate::proxy::get_proxy_state(&actual_home).map_err(|e| e.to_string())
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn start_proxy() -> Result<ProxyState, String> {
+    let actual_home = blocking(actual_home).await?;
+    crate::proxy::start_proxy(actual_home)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn stop_proxy() -> Result<ProxyState, String> {
+    blocking(move || {
+        let actual_home = actual_home()?;
+        crate::proxy::stop_proxy(&actual_home).map_err(|e| e.to_string())
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn set_request_provider(provider_id: Option<String>) -> Result<ProxyState, String> {
+    blocking(move || {
+        let actual_home = actual_home()?;
+        crate::proxy::set_request_provider(&actual_home, provider_id).map_err(|e| e.to_string())
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn save_provider(provider: ProviderConfig) -> Result<ProxyState, String> {
+    blocking(move || {
+        let actual_home = actual_home()?;
+        crate::proxy::save_provider(&actual_home, provider).map_err(|e| e.to_string())
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn remove_provider(provider_id: String) -> Result<ProxyState, String> {
+    blocking(move || {
+        let actual_home = actual_home()?;
+        crate::proxy::remove_provider(&actual_home, &provider_id).map_err(|e| e.to_string())
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn install_codex_proxy_config() -> Result<ProxyState, String> {
+    blocking(move || {
+        let actual_home = actual_home()?;
+        crate::proxy::install_codex_proxy_config(&actual_home).map_err(|e| e.to_string())
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn restore_codex_proxy_config() -> Result<ProxyState, String> {
+    blocking(move || {
+        let actual_home = actual_home()?;
+        crate::proxy::restore_codex_proxy_config(&actual_home).map_err(|e| e.to_string())
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn set_mobile_residency_account(account_name: String) -> Result<ProxyState, String> {
+    blocking(move || {
+        let actual_home = actual_home()?;
+        crate::proxy::set_mobile_residency_account(&actual_home, account_name)
+            .map_err(|e| e.to_string())
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn enable_mobile_residency() -> Result<ProxyState, String> {
+    blocking(move || {
+        let actual_home = actual_home()?;
+        crate::proxy::enable_mobile_residency(&actual_home).map_err(|e| e.to_string())
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn disable_mobile_residency() -> Result<ProxyState, String> {
+    blocking(move || {
+        let actual_home = actual_home()?;
+        crate::proxy::disable_mobile_residency(&actual_home).map_err(|e| e.to_string())
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn clear_mobile_residency() -> Result<ProxyState, String> {
+    blocking(move || {
+        let actual_home = actual_home()?;
+        crate::proxy::clear_mobile_residency(&actual_home).map_err(|e| e.to_string())
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn restore_mobile_residency() -> Result<ProxyState, String> {
+    blocking(move || {
+        let actual_home = actual_home()?;
+        crate::proxy::restore_mobile_residency(&actual_home).map_err(|e| e.to_string())
+    })
+    .await
+}
