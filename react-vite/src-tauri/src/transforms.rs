@@ -290,6 +290,33 @@ pub fn chat_completion_chunk_to_responses_sse(line: &str) -> Option<String> {
     None
 }
 
+#[derive(Default)]
+pub struct ChatCompletionSseTransformer {
+    pending: String,
+}
+
+impl ChatCompletionSseTransformer {
+    pub fn feed(&mut self, chunk: &str) -> String {
+        self.pending.push_str(chunk);
+        let mut converted = String::new();
+
+        while let Some(newline) = self.pending.find('\n') {
+            let mut line = self.pending.drain(..=newline).collect::<String>();
+            if line.ends_with('\n') {
+                line.pop();
+            }
+            if line.ends_with('\r') {
+                line.pop();
+            }
+            if let Some(event) = chat_completion_chunk_to_responses_sse(&line) {
+                converted.push_str(&event);
+            }
+        }
+
+        converted
+    }
+}
+
 pub fn chat_completion_response_to_responses(value: Value) -> Value {
     let id = value
         .get("id")
@@ -564,6 +591,19 @@ mod tests {
         assert!(!event.contains("response.output_item.added"));
         assert!(event.contains("response.function_call_arguments.delta"));
         assert!(event.contains(r#"{\"a\""#));
+    }
+
+    #[test]
+    fn buffers_split_chat_sse_lines_before_converting() {
+        let mut transformer = ChatCompletionSseTransformer::default();
+        let part_one = r#"data: {"choices":[{"delta":{"content":"hel"#;
+        let part_two = "lo\"}}]}\n\n";
+
+        assert_eq!(transformer.feed(part_one), "");
+        let converted = transformer.feed(part_two);
+
+        assert!(converted.contains("response.output_text.delta"));
+        assert!(converted.contains(r#""delta":"hello""#));
     }
 
     #[test]

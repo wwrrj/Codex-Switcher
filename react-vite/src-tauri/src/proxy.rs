@@ -8,6 +8,7 @@ use axum::routing::any;
 use axum::Router;
 use bytes::Bytes;
 use chrono::Utc;
+use futures_util::future;
 use futures_util::TryStreamExt;
 use futures_util::{SinkExt, StreamExt};
 use once_cell::sync::Lazy;
@@ -1179,15 +1180,23 @@ async fn response_from_reqwest(
         if transform_chat_stream {
             let stream = upstream
                 .bytes_stream()
-                .map_ok(|bytes| {
-                    let text = String::from_utf8_lossy(&bytes);
-                    let converted = text
-                        .lines()
-                        .filter_map(transforms::chat_completion_chunk_to_responses_sse)
-                        .collect::<String>();
-                    Bytes::from(converted)
-                })
-                .map_err(|error| std::io::Error::new(std::io::ErrorKind::Other, error));
+                .map_err(|error| std::io::Error::new(std::io::ErrorKind::Other, error))
+                .scan(
+                    transforms::ChatCompletionSseTransformer::default(),
+                    |transformer, chunk| {
+                        let item = chunk.map(|bytes| {
+                            let text = String::from_utf8_lossy(&bytes);
+                            Bytes::from(transformer.feed(&text))
+                        });
+                        future::ready(Some(item))
+                    },
+                )
+                .filter_map(|item| {
+                    future::ready(match item {
+                        Ok(bytes) if bytes.is_empty() => None,
+                        other => Some(other),
+                    })
+                });
             return Ok(builder
                 .header("content-type", "text/event-stream")
                 .body(Body::from_stream(stream))?);
@@ -1438,6 +1447,32 @@ mod tests {
         format!("http://{}", addr)
     }
 
+    async fn start_mock_split_sse_upstream() -> String {
+        async fn handler(Json(_body): Json<serde_json::Value>) -> impl IntoResponse {
+            let chunks = futures_util::stream::iter([
+                Ok::<_, std::convert::Infallible>(Bytes::from_static(
+                    br#"data: {"choices":[{"delta":{"content":"hel"#,
+                )),
+                Ok(Bytes::from_static(br#"lo"}}]}"#)),
+                Ok(Bytes::from_static(b"\n\n")),
+                Ok(Bytes::from_static(b"data: [DONE]\n\n")),
+            ]);
+            Response::builder()
+                .status(StatusCode::OK)
+                .header("content-type", "text/event-stream")
+                .body(Body::from_stream(chunks))
+                .unwrap()
+        }
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let app = Router::new().route("/v1/chat/completions", post(handler));
+        tauri::async_runtime::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        format!("http://{}", addr)
+    }
+
     async fn available_port() -> u16 {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         listener.local_addr().unwrap().port()
@@ -1678,6 +1713,62 @@ mod tests {
         assert_eq!(requests[0].path, "/v1/responses");
         assert_eq!(requests[0].status_code, Some(200));
         assert!(requests[0].success);
+        stop_proxy(&home).unwrap();
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    #[tokio::test]
+    async fn proxy_buffers_split_chat_sse_chunks() {
+        let _guard = TEST_PROXY_MUTEX.lock().await;
+        let home = temp_home("split-sse");
+        let upstream = start_mock_split_sse_upstream().await;
+        let port = available_port().await;
+        save_proxy_config(
+            &home,
+            &ProxyConfig {
+                enabled: true,
+                port,
+                routing: RoutingPolicy {
+                    request_provider_id: Some("provider:sse".to_string()),
+                    allow_third_party_failover: true,
+                    ..RoutingPolicy::default()
+                },
+                ..ProxyConfig::default()
+            },
+        )
+        .unwrap();
+        providers::save_provider(
+            &home,
+            ProviderConfig {
+                id: "provider:sse".to_string(),
+                name: "Split SSE".to_string(),
+                kind: ProviderKind::CustomChatCompletions,
+                enabled: true,
+                base_url: format!("{}/v1", upstream),
+                account_name: None,
+                api_key: Some("sk-test".to_string()),
+                model_map: None,
+                include_in_failover: true,
+                health: ProviderHealth {
+                    status: ProviderHealthStatus::Healthy,
+                    ..ProviderHealth::default()
+                },
+            },
+        )
+        .unwrap();
+
+        let state = start_proxy(home.clone()).await.unwrap();
+        let response = reqwest::Client::new()
+            .post(format!("{}/v1/responses", state.listen_url.unwrap()))
+            .json(&serde_json::json!({ "model": "gpt-4.1", "input": "hello", "stream": true }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), reqwest::StatusCode::OK);
+        let body = response.text().await.unwrap();
+        assert!(body.contains("response.output_text.delta"));
+        assert!(body.contains(r#""delta":"hello""#));
+        assert!(body.contains("response.completed"));
         stop_proxy(&home).unwrap();
         let _ = std::fs::remove_dir_all(home);
     }
