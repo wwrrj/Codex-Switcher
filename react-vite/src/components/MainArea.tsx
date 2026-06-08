@@ -29,8 +29,15 @@ export default function MainArea({ onRename, onDelete, onAddAccount }: Props) {
   const switchHistory = useAppStore((s) => s.switchHistory)
   const proxyState = useAppStore((s) => s.proxyState)
   const restoreMobileResidency = useAppStore((s) => s.restoreMobileResidency)
+  const enableMobileResidency = useAppStore((s) => s.enableMobileResidency)
+  const disableMobileResidency = useAppStore((s) => s.disableMobileResidency)
   const setRequestProvider = useAppStore((s) => s.setRequestProvider)
   const clearProxyEvents = useAppStore((s) => s.clearProxyEvents)
+  const startProxy = useAppStore((s) => s.startProxy)
+  const stopProxy = useAppStore((s) => s.stopProxy)
+  const installProxyConfig = useAppStore((s) => s.installProxyConfig)
+  const restoreProxyConfig = useAppStore((s) => s.restoreProxyConfig)
+  const updateProxyConfig = useAppStore((s) => s.updateProxyConfig)
 
   const account = accounts.find((a) => a.name === activeAccount)
     ?? accounts.find((a) => a.name === selectedAccount)
@@ -181,6 +188,17 @@ export default function MainArea({ onRename, onDelete, onAddAccount }: Props) {
               </div>
             </div>
             <div className="flex gap-2 shrink-0">
+              <button
+                onClick={() => void (residency.enabled ? disableMobileResidency() : enableMobileResidency())}
+                className={cn(
+                  'px-2.5 py-1.5 rounded-md text-[11px] font-medium transition-colors',
+                  residency.enabled
+                    ? 'text-warning bg-warning-muted hover:bg-warning/20'
+                    : 'text-primary bg-primary-muted hover:bg-primary/15'
+                )}
+              >
+                {residency.enabled ? '关闭驻留' : '启用驻留'}
+              </button>
               {residency.enabled && !residency.healthy && (
                 <button
                   onClick={() => void restoreMobileResidency()}
@@ -204,9 +222,22 @@ export default function MainArea({ onRename, onDelete, onAddAccount }: Props) {
 
         <div className="grid grid-cols-5 gap-4">
           <div className="col-span-2 rounded-xl border border-line bg-bg-surface card-ring p-4">
-            <div className="flex items-center gap-2 mb-3">
-              <RadioTower className="w-3.5 h-3.5 text-primary" />
-              <h2 className="text-sm font-semibold text-fg font-serif">代理状态</h2>
+            <div className="flex items-center justify-between gap-2 mb-3">
+              <div className="flex items-center gap-2 min-w-0">
+                <RadioTower className="w-3.5 h-3.5 text-primary" />
+                <h2 className="text-sm font-semibold text-fg font-serif">代理状态</h2>
+              </div>
+              <button
+                onClick={() => void (proxyState.status === 'running' ? stopProxy() : startProxy())}
+                className={cn(
+                  'px-2.5 py-1.5 rounded-md text-[11px] font-medium transition-colors',
+                  proxyState.status === 'running'
+                    ? 'text-warning bg-warning-muted hover:bg-warning/20'
+                    : 'text-white bg-primary hover:bg-primary-hover'
+                )}
+              >
+                {proxyState.status === 'running' ? '停止代理' : '启动代理'}
+              </button>
             </div>
             <div className="space-y-2">
               <ProxyMetric
@@ -229,6 +260,62 @@ export default function MainArea({ onRename, onDelete, onAddAccount }: Props) {
                 value={requestProvider ? `${requestProvider.name} · ${providerHealthText(requestProvider.health.status)}` : requestName}
                 tone={requestProvider?.health.status === 'cooling_down' || requestProvider?.health.status === 'invalid' ? 'warning' : undefined}
               />
+              <div className="rounded-lg bg-bg-elevated/60 border border-line-subtle px-2.5 py-2 space-y-2">
+                <label className="block">
+                  <span className="text-[10px] text-fg-subtle">请求出口</span>
+                  <select
+                    value={proxyState.config.routing.requestProviderId ?? ''}
+                    onChange={(event) => void setRequestProvider(event.target.value || undefined)}
+                    disabled={proxyState.status !== 'running'}
+                    className="mt-1 w-full px-2 py-1.5 rounded-md text-[11px] bg-bg border border-line text-fg focus:border-primary focus:outline-none disabled:opacity-60"
+                  >
+                    <option value="">默认当前账号</option>
+                    {proxyState.providers.map((provider) => (
+                      <option key={provider.id} value={provider.id}>
+                        {provider.name} · {providerKindLabel(provider.kind)}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <div className="grid grid-cols-2 gap-1.5">
+                  <QuickToggle
+                    label="故障转移"
+                    active={proxyState.config.routing.automaticFailover}
+                    onClick={() => void updateProxyConfig({
+                      ...proxyState.config,
+                      routing: {
+                        ...proxyState.config.routing,
+                        automaticFailover: !proxyState.config.routing.automaticFailover,
+                      },
+                    })}
+                  />
+                  <QuickToggle
+                    label="第三方后端"
+                    active={proxyState.config.routing.allowThirdPartyFailover}
+                    onClick={() => void updateProxyConfig({
+                      ...proxyState.config,
+                      routing: {
+                        ...proxyState.config.routing,
+                        allowThirdPartyFailover: !proxyState.config.routing.allowThirdPartyFailover,
+                      },
+                    })}
+                  />
+                </div>
+                <div className="grid grid-cols-2 gap-1.5">
+                  <button
+                    onClick={() => void installProxyConfig()}
+                    className="px-2 py-1.5 rounded-md text-[11px] font-medium text-primary bg-primary-muted hover:bg-primary/15 transition-colors"
+                  >
+                    接管 Codex
+                  </button>
+                  <button
+                    onClick={() => void restoreProxyConfig()}
+                    className="px-2 py-1.5 rounded-md text-[11px] font-medium text-fg-muted bg-bg hover:bg-bg-hover border border-line-subtle transition-colors"
+                  >
+                    恢复配置
+                  </button>
+                </div>
+              </div>
               {proxyState.recentRequests[0] && (
                 <div className="rounded-lg bg-bg-elevated/60 border border-line-subtle px-3 py-2">
                   <div className="flex items-center gap-2 text-[11px]">
@@ -633,6 +720,22 @@ function ProxyMetric({ label, value, tone }: { label: string; value: string; ton
   )
 }
 
+function QuickToggle({ label, active, onClick }: { label: string; active: boolean; onClick: () => void }) {
+  return (
+    <button
+      onClick={onClick}
+      className={cn(
+        'px-2 py-1.5 rounded-md text-[11px] font-medium border transition-colors',
+        active
+          ? 'text-success bg-success-muted border-success/20'
+          : 'text-fg-muted bg-bg border-line-subtle hover:text-fg hover:bg-bg-hover'
+      )}
+    >
+      {label} · {active ? '开' : '关'}
+    </button>
+  )
+}
+
 function MetaRow({ icon, label, value }: { icon: React.ReactNode; label: string; value: string }) {
   return (
     <div className="flex items-center justify-between text-[11px]">
@@ -669,6 +772,17 @@ function providerHealthText(status: string): string {
   if (status === 'disabled') return '已停用'
   if (status === 'invalid') return '异常'
   return '待验证'
+}
+
+function providerKindLabel(kind: string): string {
+  if (kind === 'chat_gpt_oauth') return 'OAuth'
+  if (kind === 'open_ai_api_key') return 'API Key'
+  if (kind === 'open_ai_compatible') return 'Relay'
+  if (kind === 'glm') return 'GLM'
+  if (kind === 'mimo') return 'MiMo'
+  if (kind === 'deep_seek') return 'DeepSeek'
+  if (kind === 'custom_chat_completions') return 'Chat Completions'
+  return 'Provider'
 }
 
 function tokenExpiryText(kind: string, token: { present: boolean; expiresAt?: string; status: string }): string {
