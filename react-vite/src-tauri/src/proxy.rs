@@ -220,6 +220,23 @@ pub async fn start_proxy(home: PathBuf) -> Result<ProxyState> {
     get_proxy_state(&home)
 }
 
+pub async fn restore_proxy_on_startup(home: PathBuf) -> Result<ProxyState> {
+    let config = load_proxy_config(&home)?;
+    if config.mobile_residency.enabled && config.mobile_residency.restore_on_startup {
+        let account = config
+            .mobile_residency
+            .account_name
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("移动端驻留已启用，但未选择账号"))?;
+        mobile_residency::restore_mobile_residency_auth(&home, &account)?;
+        log::info!("mobile residency restored on startup");
+    }
+    if config.enabled {
+        return start_proxy(home).await;
+    }
+    get_proxy_state(&home)
+}
+
 pub fn stop_proxy(home: &Path) -> Result<ProxyState> {
     if let Some(mut runtime) = RUNTIME.lock().unwrap().take() {
         if let Some(shutdown) = runtime.shutdown.take() {
@@ -1228,6 +1245,50 @@ mod tests {
         assert!(!stopped.config.install_codex_config);
         let restored = std::fs::read_to_string(home.join("config.toml")).unwrap();
         assert_eq!(restored, "model = \"gpt-4.1\"\n");
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    #[tokio::test]
+    async fn startup_restore_starts_proxy_and_restores_mobile_residency() {
+        let _guard = TEST_PROXY_MUTEX.lock().await;
+        let home = temp_home("startup-restore");
+        let port = available_port().await;
+        let account_dir = home.join("accounts").join("phone@example.com");
+        std::fs::create_dir_all(&account_dir).unwrap();
+        std::fs::write(
+            account_dir.join("auth.json"),
+            serde_json::json!({
+                "tokens": {
+                    "access_token": "access-token",
+                    "refresh_token": "refresh-token"
+                }
+            })
+            .to_string(),
+        )
+        .unwrap();
+        std::fs::write(home.join("auth.json"), "{}").unwrap();
+        save_proxy_config(
+            &home,
+            &ProxyConfig {
+                enabled: true,
+                port,
+                mobile_residency: MobileResidencyConfig {
+                    enabled: true,
+                    account_name: Some("phone@example.com".to_string()),
+                    restore_on_startup: true,
+                    notify_on_error: true,
+                },
+                ..ProxyConfig::default()
+            },
+        )
+        .unwrap();
+
+        let state = restore_proxy_on_startup(home.clone()).await.unwrap();
+        assert!(matches!(state.status, ProxyRuntimeStatus::Running));
+        assert!(state.listen_url.is_some());
+        let restored = std::fs::read_to_string(home.join("auth.json")).unwrap();
+        assert!(restored.contains("access-token"));
+        stop_proxy(&home).unwrap();
         let _ = std::fs::remove_dir_all(home);
     }
 

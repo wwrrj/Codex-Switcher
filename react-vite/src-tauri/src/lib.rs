@@ -21,6 +21,14 @@ pub fn run() {
         }))
         .setup(|app| {
             tray::setup(app)?;
+            tauri::async_runtime::spawn(async {
+                if let Err(error) = restore_startup_state().await {
+                    log::warn!(
+                        "startup restore failed: {}",
+                        crate::secrets::sanitize_message(&error.to_string())
+                    );
+                }
+            });
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -93,4 +101,12 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+async fn restore_startup_state() -> anyhow::Result<()> {
+    let home = core::codex_home(None)?;
+    let settings = core::load_settings(&home)?;
+    let actual_home = core::codex_home(settings.codex_home.as_deref())?;
+    proxy::restore_proxy_on_startup(actual_home).await?;
+    Ok(())
 }
