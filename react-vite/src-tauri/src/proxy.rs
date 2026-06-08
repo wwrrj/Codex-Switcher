@@ -120,6 +120,24 @@ fn validate_proxy_config(config: &ProxyConfig) -> Result<()> {
     Ok(())
 }
 
+fn validate_request_provider(home: &Path, provider_id: &str) -> Result<()> {
+    let accounts = core::list_accounts(home).unwrap_or_default();
+    let provider = providers::merged_providers(home, &accounts)?
+        .into_iter()
+        .find(|provider| provider.id == provider_id)
+        .ok_or_else(|| anyhow::anyhow!("请求出口不存在：{}", provider_id))?;
+    if !provider.enabled {
+        return Err(anyhow::anyhow!("请求出口已停用：{}", provider.name));
+    }
+    if matches!(
+        provider.health.status,
+        ProviderHealthStatus::Disabled | ProviderHealthStatus::Invalid
+    ) {
+        return Err(anyhow::anyhow!("请求出口不可用：{}", provider.name));
+    }
+    Ok(())
+}
+
 pub fn save_proxy_config(home: &Path, config: &ProxyConfig) -> Result<()> {
     validate_proxy_config(config)?;
     write_json(&proxy_config_file(home), config)
@@ -328,6 +346,9 @@ pub fn stop_proxy(home: &Path) -> Result<ProxyState> {
 }
 
 pub fn set_request_provider(home: &Path, provider_id: Option<String>) -> Result<ProxyState> {
+    if let Some(provider_id) = provider_id.as_deref() {
+        validate_request_provider(home, provider_id)?;
+    }
     let mut config = load_proxy_config(home)?;
     config.routing.request_provider_id = provider_id;
     save_proxy_config(home, &config)?;
@@ -356,6 +377,13 @@ pub fn update_provider_options(
     include_in_failover: Option<bool>,
 ) -> Result<ProxyState> {
     providers::update_provider_options(home, provider_id, enabled, include_in_failover)?;
+    if enabled == Some(false) {
+        let mut config = load_proxy_config(home)?;
+        if config.routing.request_provider_id.as_deref() == Some(provider_id) {
+            config.routing.request_provider_id = None;
+            save_proxy_config(home, &config)?;
+        }
+    }
     get_proxy_state(home)
 }
 
@@ -1828,6 +1856,51 @@ mod tests {
         .unwrap();
 
         remove_provider(&home, "provider:delete").unwrap();
+        assert!(load_proxy_config(&home)
+            .unwrap()
+            .routing
+            .request_provider_id
+            .is_none());
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    #[test]
+    fn setting_unknown_request_provider_is_rejected() {
+        let home = temp_home("unknown-request-provider");
+        let error = set_request_provider(&home, Some("account:missing@example.com".to_string()))
+            .unwrap_err();
+        assert!(error.to_string().contains("请求出口不存在"));
+        assert!(load_proxy_config(&home)
+            .unwrap()
+            .routing
+            .request_provider_id
+            .is_none());
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    #[test]
+    fn disabling_current_request_provider_clears_route() {
+        let home = temp_home("disable-current-provider");
+        providers::save_provider(
+            &home,
+            ProviderConfig {
+                id: "provider:disable".to_string(),
+                name: "Disable".to_string(),
+                kind: ProviderKind::OpenAiCompatible,
+                enabled: true,
+                base_url: "https://relay.example/v1".to_string(),
+                account_name: None,
+                api_key: Some("sk-test".to_string()),
+                model_map: None,
+                include_in_failover: true,
+                health: ProviderHealth::default(),
+            },
+        )
+        .unwrap();
+        set_request_provider(&home, Some("provider:disable".to_string())).unwrap();
+
+        update_provider_options(&home, "provider:disable", Some(false), None).unwrap();
+
         assert!(load_proxy_config(&home)
             .unwrap()
             .routing
