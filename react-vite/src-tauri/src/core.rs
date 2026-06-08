@@ -492,6 +492,51 @@ pub fn detect_email_for_current_auth(home: &Path) -> Result<Option<String>> {
     detect_email_from_auth_file(&ap)
 }
 
+fn auth_identity_keys(auth_file: &Path) -> Vec<String> {
+    let Ok(auth_json) = read_json(auth_file) else {
+        return Vec::new();
+    };
+
+    let mut keys = Vec::new();
+    if let Some(email) = find_email_in_value(&auth_json) {
+        keys.push(format!("email:{}", email.trim().to_lowercase()));
+    }
+
+    let claims = chatgpt_auth_claims(&auth_json);
+    let account_id = string_at_path(&auth_json, &["tokens", "account_id"])
+        .or_else(|| string_at_path(&auth_json, &["account_id"]))
+        .map(String::from)
+        .or_else(|| {
+            claims
+                .as_ref()
+                .and_then(|v| v.get("chatgpt_account_id"))
+                .and_then(|v| v.as_str())
+                .map(String::from)
+        });
+    if let Some(account_id) = account_id {
+        let trimmed = account_id.trim();
+        if !trimmed.is_empty() {
+            keys.push(format!("account_id:{trimmed}"));
+        }
+    }
+
+    if let Some(payload) = find_token(&auth_json).and_then(|token| decode_jwt_payload(&token)) {
+        if let Some(email) = find_email_in_value(&payload) {
+            keys.push(format!("email:{}", email.trim().to_lowercase()));
+        }
+        if let Some(subject) = string_at_path(&payload, &["sub"]) {
+            let trimmed = subject.trim();
+            if !trimmed.is_empty() {
+                keys.push(format!("subject:{trimmed}"));
+            }
+        }
+    }
+
+    keys.sort();
+    keys.dedup();
+    keys
+}
+
 fn infer_subscription_from_value(
     value: &Value,
     source: SubscriptionSource,
@@ -1934,9 +1979,20 @@ pub fn detect_auth(home: &Path, names: &[String]) -> Result<CodexAuthStatus> {
 
     let prefix = sha256_prefix(&ap)?;
     let adir = accounts_dir(home);
+    let active_identity = auth_identity_keys(&ap);
     let matched = names.iter().find(|n| {
         let acc_auth = adir.join(n).join("auth.json");
-        acc_auth.exists() && sha256_prefix(&acc_auth).unwrap_or_default() == prefix
+        if !acc_auth.exists() {
+            return false;
+        }
+        if sha256_prefix(&acc_auth).unwrap_or_default() == prefix {
+            return true;
+        }
+        let account_identity = auth_identity_keys(&acc_auth);
+        !active_identity.is_empty()
+            && active_identity
+                .iter()
+                .any(|key| account_identity.iter().any(|account_key| account_key == key))
     });
 
     Ok(CodexAuthStatus {
@@ -1971,6 +2027,11 @@ pub fn list_accounts(home: &Path) -> Result<Vec<AccountMeta>> {
     } else {
         None
     };
+    let active_identity = if ap.exists() {
+        auth_identity_keys(&ap)
+    } else {
+        Vec::new()
+    };
     let priorities = load_priorities(home)?;
 
     let mut result = Vec::new();
@@ -1983,7 +2044,12 @@ pub fn list_accounts(home: &Path) -> Result<Vec<AccountMeta>> {
 
         let prefix = sha256_prefix(&acc_auth)?;
         let size = file_size(&acc_auth)?;
-        let is_active = active_prefix.as_ref() == Some(&prefix);
+        let account_identity = auth_identity_keys(&acc_auth);
+        let identity_matches = !active_identity.is_empty()
+            && active_identity
+                .iter()
+                .any(|key| account_identity.iter().any(|account_key| account_key == key));
+        let is_active = active_prefix.as_ref() == Some(&prefix) || identity_matches;
 
         // Read meta.json
         let meta_path = entry.path().join("meta.json");
@@ -3007,6 +3073,43 @@ mod tests {
         }
         let _ = std::fs::remove_dir_all(env_home);
         let _ = std::fs::remove_dir_all(detected);
+    }
+
+    #[test]
+    fn detect_auth_matches_same_identity_after_token_refresh() {
+        let home = temp_home("identity-match");
+        let saved_auth = r#"{
+            "auth_mode": "chatgpt",
+            "email": "user@example.com",
+            "tokens": {
+                "account_id": "acc_same",
+                "access_token": "old-access",
+                "refresh_token": "refresh"
+            }
+        }"#;
+        let refreshed_auth = r#"{
+            "auth_mode": "chatgpt",
+            "email": "USER@example.com",
+            "tokens": {
+                "account_id": "acc_same",
+                "access_token": "new-access",
+                "refresh_token": "refresh"
+            }
+        }"#;
+
+        let acc_dir = accounts_dir(&home).join("user@example.com");
+        std::fs::create_dir_all(&acc_dir).unwrap();
+        std::fs::write(acc_dir.join("auth.json"), saved_auth).unwrap();
+        std::fs::write(auth_path(&home), refreshed_auth).unwrap();
+
+        let status = detect_auth(&home, &["user@example.com".to_string()]).unwrap();
+        assert_eq!(status.status, "matched");
+        assert_eq!(status.matched_account.as_deref(), Some("user@example.com"));
+
+        let accounts = list_accounts(&home).unwrap();
+        assert_eq!(accounts.len(), 1);
+        assert_eq!(accounts[0].is_active, Some(true));
+        let _ = std::fs::remove_dir_all(home);
     }
 
     #[test]
