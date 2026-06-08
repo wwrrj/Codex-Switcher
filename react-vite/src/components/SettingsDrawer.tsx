@@ -90,10 +90,18 @@ export default function SettingsDrawer({ open, onClose }: Props) {
   const [providerModelMap, setProviderModelMap] = useState('')
   const [editingProviderId, setEditingProviderId] = useState<string | null>(null)
   const [checkingProviderId, setCheckingProviderId] = useState<string | null>(null)
+  const [proxyHostDraft, setProxyHostDraft] = useState(proxyState.config.host)
+  const [proxyPortDraft, setProxyPortDraft] = useState(String(proxyState.config.port))
 
   useEffect(() => {
     if (open) setForm(settings)
   }, [open, settings])
+
+  useEffect(() => {
+    if (!open) return
+    setProxyHostDraft(proxyState.config.host)
+    setProxyPortDraft(String(proxyState.config.port))
+  }, [open, proxyState.config.host, proxyState.config.port])
 
   useEffect(() => {
     if (!open) return
@@ -140,6 +148,19 @@ export default function SettingsDrawer({ open, onClose }: Props) {
       health: existingProvider?.health ?? { status: 'unknown' },
     })
     resetProviderForm()
+  }
+
+  const handleSaveProxyListenAddress = async () => {
+    const host = proxyHostDraft.trim() || '127.0.0.1'
+    const port = Math.max(1, Math.min(65535, parseInt(proxyPortDraft, 10) || 14550))
+    setProxyHostDraft(host)
+    setProxyPortDraft(String(port))
+    if (host === proxyState.config.host && port === proxyState.config.port) return
+    await updateProxyConfig({
+      ...proxyState.config,
+      host,
+      port,
+    })
   }
 
   const resetProviderForm = () => {
@@ -318,6 +339,43 @@ export default function SettingsDrawer({ open, onClose }: Props) {
                     ))}
                   </div>
                 )}
+              </div>
+              <div className="rounded-md bg-bg-elevated/60 border border-line-subtle px-3 py-2 space-y-2">
+                <div className="grid grid-cols-[1fr_92px] gap-2">
+                  <label className="block">
+                    <span className="text-[11px] text-fg-muted">监听地址</span>
+                    <input
+                      value={proxyHostDraft}
+                      onChange={(event) => setProxyHostDraft(event.target.value)}
+                      onBlur={() => void handleSaveProxyListenAddress()}
+                      placeholder="127.0.0.1"
+                      className="mt-1 w-full px-2.5 py-1.5 rounded-md text-xs bg-bg border border-line text-fg placeholder:text-fg-subtle focus:border-primary focus:outline-none"
+                    />
+                  </label>
+                  <label className="block">
+                    <span className="text-[11px] text-fg-muted">端口</span>
+                    <input
+                      type="number"
+                      min={1}
+                      max={65535}
+                      value={proxyPortDraft}
+                      onChange={(event) => setProxyPortDraft(event.target.value)}
+                      onBlur={() => void handleSaveProxyListenAddress()}
+                      className="mt-1 w-full px-2.5 py-1.5 rounded-md text-xs bg-bg border border-line text-fg focus:border-primary focus:outline-none"
+                    />
+                  </label>
+                </div>
+                <div className="flex items-center justify-between gap-2">
+                  <p className="text-[10px] text-fg-subtle">
+                    默认只监听本机；运行中修改地址或端口后需要重启代理。
+                  </p>
+                  <button
+                    onClick={() => void handleSaveProxyListenAddress()}
+                    className="px-2.5 py-1 rounded-md text-[10px] font-medium text-primary bg-primary-muted hover:bg-primary/15 shrink-0"
+                  >
+                    保存地址
+                  </button>
+                </div>
               </div>
               <div className="flex gap-2">
                 <button
