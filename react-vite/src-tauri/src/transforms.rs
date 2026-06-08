@@ -35,6 +35,10 @@ pub fn responses_to_chat_completions(mut input: Value, model_override: Option<&s
         }
     }
 
+    if let Some(reasoning) = input.get("reasoning").cloned() {
+        output["reasoning"] = reasoning;
+    }
+
     output
 }
 
@@ -86,6 +90,44 @@ fn normalize_content(content: Value) -> Value {
     }
 }
 
+fn chat_tool_calls_to_responses_events(tool_calls: &Value) -> Vec<String> {
+    let Some(items) = tool_calls.as_array() else {
+        return Vec::new();
+    };
+    items
+        .iter()
+        .filter_map(|tool| {
+            let id = tool
+                .get("id")
+                .and_then(Value::as_str)
+                .unwrap_or("tool_call");
+            let function = tool.get("function").cloned().unwrap_or(Value::Null);
+            let name = function
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or("tool");
+            let arguments = function
+                .get("arguments")
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            let event = json!({
+                "type": "response.output_item.added",
+                "item": {
+                    "type": "function_call",
+                    "id": id,
+                    "call_id": id,
+                    "name": name,
+                    "arguments": arguments
+                }
+            });
+            Some(format!(
+                "event: response.output_item.added\ndata: {}\n\n",
+                event
+            ))
+        })
+        .collect()
+}
+
 pub fn chat_completion_chunk_to_responses_sse(line: &str) -> Option<String> {
     let trimmed = line.trim();
     if trimmed.is_empty() {
@@ -112,6 +154,26 @@ pub fn chat_completion_chunk_to_responses_sse(line: &str) -> Option<String> {
             "event: response.output_text.delta\ndata: {}\n\n",
             event
         ));
+    }
+    if let Some(reasoning) = choice
+        .get("delta")
+        .and_then(|v| v.get("reasoning_content").or_else(|| v.get("reasoning")))
+        .and_then(Value::as_str)
+    {
+        let event = json!({
+            "type": "response.reasoning_text.delta",
+            "delta": reasoning
+        });
+        return Some(format!(
+            "event: response.reasoning_text.delta\ndata: {}\n\n",
+            event
+        ));
+    }
+    if let Some(tool_calls) = choice.get("delta").and_then(|v| v.get("tool_calls")) {
+        let events = chat_tool_calls_to_responses_events(tool_calls).join("");
+        if !events.is_empty() {
+            return Some(events);
+        }
     }
     if choice.get("finish_reason").is_some() {
         return Some(
@@ -171,5 +233,37 @@ mod tests {
         .unwrap();
         assert!(event.contains("response.output_text.delta"));
         assert!(event.contains("hello"));
+    }
+
+    #[test]
+    fn preserves_reasoning_config_in_chat_request() {
+        let input = json!({
+            "model": "gpt-4.1",
+            "input": "think",
+            "reasoning": { "effort": "high" }
+        });
+        let out = responses_to_chat_completions(input, None);
+        assert_eq!(out["reasoning"]["effort"], "high");
+    }
+
+    #[test]
+    fn converts_reasoning_stream_delta_to_responses_event() {
+        let event = chat_completion_chunk_to_responses_sse(
+            r#"data: {"choices":[{"delta":{"reasoning_content":"chain"}}]}"#,
+        )
+        .unwrap();
+        assert!(event.contains("response.reasoning_text.delta"));
+        assert!(event.contains("chain"));
+    }
+
+    #[test]
+    fn converts_tool_call_stream_delta_to_responses_event() {
+        let event = chat_completion_chunk_to_responses_sse(
+            r#"data: {"choices":[{"delta":{"tool_calls":[{"id":"call_1","function":{"name":"run","arguments":"{}"}}]}}]}"#,
+        )
+        .unwrap();
+        assert!(event.contains("response.output_item.added"));
+        assert!(event.contains("function_call"));
+        assert!(event.contains("run"));
     }
 }

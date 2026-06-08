@@ -17,6 +17,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use tokio::sync::oneshot;
 use tokio_tungstenite::connect_async;
+use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::Message as TungsteniteMessage;
 
 use crate::codex_config;
@@ -331,12 +332,12 @@ async fn proxy_websocket(
         url = url.replacen("http://", "ws://", 1);
     }
 
-    let mut request =
-        tokio_tungstenite::tungstenite::handshake::client::Request::builder().uri(url);
+    let mut request = url.into_client_request()?;
     if let Some(auth) = provider_auth_header(&state.home, &provider)? {
-        request = request.header("authorization", auth);
+        request
+            .headers_mut()
+            .insert("authorization", auth.parse()?);
     }
-    let request = request.body(())?;
     let (upstream_socket, _) = connect_async(request).await?;
     let (mut upstream_write, mut upstream_read) = upstream_socket.split();
     let (mut client_write, mut client_read) = client_socket.split();
@@ -708,7 +709,7 @@ fn json_response(status: StatusCode, value: serde_json::Value) -> Response<Body>
 #[cfg(test)]
 mod tests {
     use super::*;
-    use axum::routing::post;
+    use axum::routing::{any as route_any, post};
     use axum::Json;
     use once_cell::sync::Lazy;
 
@@ -906,6 +907,92 @@ mod tests {
         assert_eq!(response.status(), reqwest::StatusCode::OK);
         assert!(response.text().await.unwrap().contains("ok"));
         assert!(!load_failovers(&home).is_empty());
+        stop_proxy(&home).unwrap();
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    async fn start_mock_ws_upstream() -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        async fn ws_echo(ws: WebSocketUpgrade) -> impl IntoResponse {
+            ws.on_upgrade(|mut socket| async move {
+                while let Some(message) = socket.next().await {
+                    let Ok(message) = message else {
+                        break;
+                    };
+                    if matches!(message, AxumWsMessage::Text(_) | AxumWsMessage::Binary(_)) {
+                        let _ = socket.send(message).await;
+                    }
+                }
+            })
+        }
+        let app = Router::new().route("/v1/realtime", route_any(ws_echo));
+        tauri::async_runtime::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        format!("http://{}", addr)
+    }
+
+    #[tokio::test]
+    async fn proxy_bridges_websocket_messages() {
+        let _guard = TEST_PROXY_MUTEX.lock().await;
+        let home = temp_home("ws");
+        let upstream = start_mock_ws_upstream().await;
+        let port = available_port().await;
+        save_proxy_config(
+            &home,
+            &ProxyConfig {
+                enabled: true,
+                port,
+                routing: RoutingPolicy {
+                    request_provider_id: Some("provider:ws".to_string()),
+                    allow_third_party_failover: true,
+                    ..RoutingPolicy::default()
+                },
+                ..ProxyConfig::default()
+            },
+        )
+        .unwrap();
+        providers::save_provider(
+            &home,
+            ProviderConfig {
+                id: "provider:ws".to_string(),
+                name: "WS".to_string(),
+                kind: ProviderKind::OpenAiCompatible,
+                enabled: true,
+                base_url: format!("{}/v1", upstream),
+                account_name: None,
+                api_key: None,
+                model_map: None,
+                include_in_failover: true,
+                health: ProviderHealth {
+                    status: ProviderHealthStatus::Healthy,
+                    ..ProviderHealth::default()
+                },
+            },
+        )
+        .unwrap();
+
+        let direct_url = upstream.replace("http://", "ws://") + "/v1/realtime";
+        let (mut direct_socket, _) = connect_async(direct_url).await.unwrap();
+        direct_socket
+            .send(TungsteniteMessage::Text("direct".to_string()))
+            .await
+            .unwrap();
+        let direct_response = direct_socket.next().await.unwrap().unwrap();
+        assert_eq!(direct_response.into_text().unwrap(), "direct");
+        direct_socket.close(None).await.unwrap();
+
+        let state = start_proxy(home.clone()).await.unwrap();
+        let ws_url = state.listen_url.unwrap().replace("http://", "ws://") + "/v1/realtime";
+        let (mut socket, _) = connect_async(ws_url).await.unwrap();
+        socket
+            .send(TungsteniteMessage::Text("ping".to_string()))
+            .await
+            .unwrap();
+        let response = socket.next().await.unwrap().unwrap();
+        assert_eq!(response.into_text().unwrap(), "ping");
+        socket.close(None).await.unwrap();
         stop_proxy(&home).unwrap();
         let _ = std::fs::remove_dir_all(home);
     }
