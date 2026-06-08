@@ -54,6 +54,7 @@ export default function SettingsDrawer({ open, onClose }: Props) {
   const setRequestProvider = useAppStore((s) => s.setRequestProvider)
   const updateProviderOptions = useAppStore((s) => s.updateProviderOptions)
   const checkProviderHealth = useAppStore((s) => s.checkProviderHealth)
+  const checkAllProviderHealth = useAppStore((s) => s.checkAllProviderHealth)
   const setMobileResidencyAccount = useAppStore((s) => s.setMobileResidencyAccount)
   const enableMobileResidency = useAppStore((s) => s.enableMobileResidency)
   const disableMobileResidency = useAppStore((s) => s.disableMobileResidency)
@@ -118,6 +119,15 @@ export default function SettingsDrawer({ open, onClose }: Props) {
     setCheckingProviderId(providerId)
     try {
       await checkProviderHealth(providerId)
+    } finally {
+      setCheckingProviderId(null)
+    }
+  }
+
+  const handleCheckAllProviders = async () => {
+    setCheckingProviderId('__all__')
+    try {
+      await checkAllProviderHealth()
     } finally {
       setCheckingProviderId(null)
     }
@@ -365,12 +375,24 @@ export default function SettingsDrawer({ open, onClose }: Props) {
                 type="password"
                 className="w-full px-2.5 py-1.5 rounded-md text-xs bg-bg-elevated border border-line text-fg placeholder:text-fg-subtle focus:border-primary focus:outline-none"
               />
-              <button
-                onClick={() => void handleSaveProvider()}
-                className="px-3 py-1.5 rounded-md text-xs font-medium text-white bg-primary hover:bg-primary-hover"
-              >
-                添加后端
-              </button>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  onClick={() => void handleSaveProvider()}
+                  className="px-3 py-1.5 rounded-md text-xs font-medium text-white bg-primary hover:bg-primary-hover"
+                >
+                  添加后端
+                </button>
+                {proxyState.providers.some((provider) => provider.kind !== 'chat_gpt_oauth') && (
+                  <button
+                    onClick={() => void handleCheckAllProviders()}
+                    disabled={checkingProviderId === '__all__'}
+                    className="px-3 py-1.5 rounded-md text-xs font-medium text-primary bg-primary-muted hover:bg-primary/15 disabled:opacity-60"
+                  >
+                    <RefreshCw className={cn('inline w-3 h-3 mr-1', checkingProviderId === '__all__' && 'animate-spin')} />
+                    检查全部
+                  </button>
+                )}
+              </div>
               {proxyState.providers.filter((provider) => provider.kind !== 'chat_gpt_oauth').length > 0 && (
                 <div className="space-y-2 pt-1">
                   {proxyState.providers.filter((provider) => provider.kind !== 'chat_gpt_oauth').map((provider) => (
@@ -432,7 +454,7 @@ export default function SettingsDrawer({ open, onClose }: Props) {
                         </button>
                         <button
                           onClick={() => void handleCheckProvider(provider.id)}
-                          disabled={checkingProviderId === provider.id}
+                          disabled={checkingProviderId === provider.id || checkingProviderId === '__all__'}
                           className="px-2.5 py-1 rounded-md text-[10px] font-medium text-fg-muted bg-bg hover:bg-bg-hover disabled:opacity-60"
                         >
                           <RefreshCw className={cn('inline w-2.5 h-2.5 mr-1', checkingProviderId === provider.id && 'animate-spin')} />

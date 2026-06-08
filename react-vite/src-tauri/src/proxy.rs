@@ -325,6 +325,17 @@ pub async fn check_provider_health(home: PathBuf, provider_id: String) -> Result
     get_proxy_state(&home)
 }
 
+pub async fn check_all_provider_health(home: PathBuf) -> Result<ProxyState> {
+    let provider_ids = providers::load_provider_configs(&home)?
+        .into_iter()
+        .map(|provider| provider.id)
+        .collect::<Vec<_>>();
+    for provider_id in provider_ids {
+        check_provider_health(home.clone(), provider_id).await?;
+    }
+    get_proxy_state(&home)
+}
+
 pub fn install_codex_proxy_config(home: &Path) -> Result<ProxyState> {
     let mut config = load_proxy_config(home)?;
     codex_config::install_proxy_config(home, &config.host, config.port)?;
@@ -1015,6 +1026,47 @@ mod tests {
             .as_deref()
             .unwrap()
             .contains("401"));
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    #[tokio::test]
+    async fn check_all_provider_health_updates_configured_providers() {
+        let _guard = TEST_PROXY_MUTEX.lock().await;
+        let home = temp_home("health-all");
+        let good = start_mock_models_upstream(StatusCode::OK).await;
+        let bad = start_mock_models_upstream(StatusCode::UNAUTHORIZED).await;
+        for (id, base_url) in [("provider:good", good), ("provider:bad", bad)] {
+            providers::save_provider(
+                &home,
+                ProviderConfig {
+                    id: id.to_string(),
+                    name: id.to_string(),
+                    kind: ProviderKind::OpenAiCompatible,
+                    enabled: true,
+                    base_url: format!("{}/v1", base_url),
+                    account_name: None,
+                    api_key: Some("sk-test".to_string()),
+                    model_map: None,
+                    include_in_failover: true,
+                    health: ProviderHealth::default(),
+                },
+            )
+            .unwrap();
+        }
+
+        let state = check_all_provider_health(home.clone()).await.unwrap();
+        let good = state
+            .providers
+            .iter()
+            .find(|provider| provider.id == "provider:good")
+            .unwrap();
+        let bad = state
+            .providers
+            .iter()
+            .find(|provider| provider.id == "provider:bad")
+            .unwrap();
+        assert_eq!(good.health.status, ProviderHealthStatus::Healthy);
+        assert_eq!(bad.health.status, ProviderHealthStatus::Invalid);
         let _ = std::fs::remove_dir_all(home);
     }
 

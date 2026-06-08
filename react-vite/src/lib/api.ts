@@ -153,6 +153,12 @@ export async function checkProviderHealth(providerId: string): Promise<ProxyStat
   return state
 }
 
+export async function checkAllProviderHealth(): Promise<ProxyState> {
+  const state = await invoke<ProxyState>('check_all_provider_health')
+  addLog('info', '已检查全部请求出口')
+  return state
+}
+
 export async function setMobileResidencyAccount(accountName: string): Promise<ProxyState> {
   const state = await invoke<ProxyState>('set_mobile_residency_account', { accountName })
   addLog('success', `已设置移动端驻留：${accountName}`)
