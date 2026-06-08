@@ -139,6 +139,12 @@ function mergeUsageIntoHistory(history: DailyUsageEntry[], usage: CodexUsageInfo
   return trimUsageHistory(next)
 }
 
+function resolveVisibleAccount(accounts: AccountMeta[], preferred?: string | null, active?: string | null): string | null {
+  if (active && accounts.some((account) => account.name === active)) return active
+  if (preferred && accounts.some((account) => account.name === preferred)) return preferred
+  return accounts[0]?.name ?? null
+}
+
 interface AppStore {
   accounts: AccountMeta[]
   authStatus: CodexAuthStatus | null
@@ -266,7 +272,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
         accounts,
         authStatus: state.authStatus,
         activeAccount: state.activeAccount ?? null,
-        selectedAccount: state.selectedAccount ?? state.activeAccount ?? null,
+        selectedAccount: resolveVisibleAccount(accounts, state.selectedAccount, state.activeAccount),
         logs: state.logs,
         settings: state.settings,
         theme: state.settings.theme,
@@ -399,7 +405,14 @@ export const useAppStore = create<AppStore>((set, get) => ({
     try {
       const authStatus = await api.refreshActiveAuthTokens()
       const accounts = await api.listAccounts()
-      set({ accounts, authStatus, logs: api.getLogs() })
+      const active = authStatus.matchedAccount ?? accounts.find((account) => account.isActive)?.name ?? null
+      set({
+        accounts,
+        authStatus,
+        activeAccount: active,
+        selectedAccount: resolveVisibleAccount(accounts, get().selectedAccount, active),
+        logs: api.getLogs(),
+      })
       get().addToast('success', '已刷新 Codex OAuth token')
     } catch (e: unknown) {
       get().addToast('error', e instanceof Error ? e.message : '刷新 Token 失败')

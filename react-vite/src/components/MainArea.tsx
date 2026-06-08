@@ -15,6 +15,7 @@ interface Props {
 
 export default function MainArea({ onRename, onDelete, onAddAccount }: Props) {
   const activeAccount = useAppStore((s) => s.activeAccount)
+  const selectedAccount = useAppStore((s) => s.selectedAccount)
   const accounts = useAppStore((s) => s.accounts)
   const isRefreshingAuth = useAppStore((s) => s.isRefreshingAuth)
   const isRefreshingAll = useAppStore((s) => s.isRefreshingAll)
@@ -31,7 +32,10 @@ export default function MainArea({ onRename, onDelete, onAddAccount }: Props) {
   const setRequestProvider = useAppStore((s) => s.setRequestProvider)
   const clearProxyEvents = useAppStore((s) => s.clearProxyEvents)
 
-  const account = accounts.find((a) => a.name === activeAccount) ?? null
+  const account = accounts.find((a) => a.name === activeAccount)
+    ?? accounts.find((a) => a.name === selectedAccount)
+    ?? accounts[0]
+    ?? null
   const hasAccount = account !== null
 
   // Derive values safely — account may be null
