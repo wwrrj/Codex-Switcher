@@ -12,6 +12,7 @@ use futures_util::TryStreamExt;
 use futures_util::{SinkExt, StreamExt};
 use once_cell::sync::Lazy;
 use reqwest::header::{HeaderName, HeaderValue, AUTHORIZATION, CONTENT_LENGTH, HOST};
+use std::fmt;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -41,6 +42,20 @@ struct ProxyAppState {
     home: PathBuf,
     client: reqwest::Client,
 }
+
+#[derive(Debug)]
+struct UpstreamFailure {
+    reason: String,
+    status_code: Option<u16>,
+}
+
+impl fmt::Display for UpstreamFailure {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.reason)
+    }
+}
+
+impl std::error::Error for UpstreamFailure {}
 
 fn config_dir(home: &Path) -> PathBuf {
     home.join("config")
@@ -475,7 +490,10 @@ async fn proxy_request(state: ProxyAppState, req: Request<Body>) -> Result<Respo
                 return Ok(response);
             }
             Err(error) => {
-                let reason = sanitize_message(&error.to_string());
+                let (reason, status_code) = error
+                    .downcast_ref::<UpstreamFailure>()
+                    .map(|failure| (sanitize_message(&failure.reason), failure.status_code))
+                    .unwrap_or_else(|| (sanitize_message(&error.to_string()), None));
                 providers::mark_provider_failure(
                     &state.home,
                     &provider.id,
@@ -483,7 +501,21 @@ async fn proxy_request(state: ProxyAppState, req: Request<Body>) -> Result<Respo
                     config.routing.cooldown_seconds,
                 )
                 .ok();
-                record_failover(&state.home, &provider, None, &reason, None, &config);
+                let next_provider = if attempt_idx + 1 < max_attempts {
+                    let accounts = core::list_accounts(&state.home).unwrap_or_default();
+                    let provider_list = providers::merged_providers(&state.home, &accounts)?;
+                    routing::choose_provider(&provider_list, &config.routing, &attempted)
+                        .map(|decision| decision.provider)
+                } else {
+                    None
+                };
+                record_failover(
+                    &state.home,
+                    &provider,
+                    next_provider.as_ref(),
+                    &reason,
+                    status_code,
+                );
                 last_error = Some(error);
                 if attempt_idx + 1 < max_attempts {
                     continue;
@@ -501,9 +533,7 @@ fn record_failover(
     to: Option<&ProviderConfig>,
     reason: &str,
     status_code: Option<u16>,
-    config: &ProxyConfig,
 ) {
-    providers::mark_provider_failure(home, &from.id, reason, config.routing.cooldown_seconds).ok();
     append_failover(
         home,
         FailoverEvent {
@@ -574,11 +604,11 @@ async fn forward_once(
         let body = upstream.text().await.unwrap_or_default();
         let kind = routing::classify_failure(Some(status_u16), &body)
             .unwrap_or(routing::FailureKind::Unknown);
-        return Err(anyhow::anyhow!(
-            "{}: HTTP {}",
-            routing::failure_reason(&kind),
-            status_u16
-        ));
+        return Err(UpstreamFailure {
+            reason: format!("{}: HTTP {}", routing::failure_reason(&kind), status_u16),
+            status_code: Some(status_u16),
+        }
+        .into());
     }
 
     if !is_sse {
@@ -586,7 +616,11 @@ async fn forward_once(
         let body = upstream.bytes().await?;
         let body_text = String::from_utf8_lossy(&body);
         if let Some(kind) = routing::classify_failure(Some(status.as_u16()), &body_text) {
-            return Err(anyhow::anyhow!("{}", routing::failure_reason(&kind)));
+            return Err(UpstreamFailure {
+                reason: routing::failure_reason(&kind).to_string(),
+                status_code: Some(status.as_u16()),
+            }
+            .into());
         }
         return response_from_parts(status_code, headers, Body::from(body));
     }
@@ -924,7 +958,11 @@ mod tests {
             .unwrap();
         assert_eq!(response.status(), reqwest::StatusCode::OK);
         assert!(response.text().await.unwrap().contains("ok"));
-        assert!(!load_failovers(&home).is_empty());
+        let failovers = load_failovers(&home);
+        assert!(!failovers.is_empty());
+        assert_eq!(failovers[0].from_provider, "provider:bad");
+        assert_eq!(failovers[0].to_provider.as_deref(), Some("provider:good"));
+        assert_eq!(failovers[0].status_code, Some(429));
         stop_proxy(&home).unwrap();
         let _ = std::fs::remove_dir_all(home);
     }
