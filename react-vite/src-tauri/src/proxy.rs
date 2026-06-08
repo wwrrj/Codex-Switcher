@@ -588,13 +588,9 @@ async fn proxy_request(state: ProxyAppState, req: Request<Body>) -> Result<Respo
                 } else {
                     None
                 };
-                record_failover(
-                    &state.home,
-                    &provider,
-                    next_provider.as_ref(),
-                    &reason,
-                    status_code,
-                );
+                if let Some(next_provider) = next_provider.as_ref() {
+                    record_failover(&state.home, &provider, next_provider, &reason, status_code);
+                }
                 last_error = Some(error);
                 if attempt_idx + 1 < max_attempts {
                     continue;
@@ -609,7 +605,7 @@ async fn proxy_request(state: ProxyAppState, req: Request<Body>) -> Result<Respo
 fn record_failover(
     home: &Path,
     from: &ProviderConfig,
-    to: Option<&ProviderConfig>,
+    to: &ProviderConfig,
     reason: &str,
     status_code: Option<u16>,
 ) {
@@ -619,7 +615,7 @@ fn record_failover(
             id: uuid::Uuid::new_v4().to_string(),
             time: Utc::now().to_rfc3339(),
             from_provider: from.name.clone(),
-            to_provider: to.map(|provider| provider.name.clone()),
+            to_provider: Some(to.name.clone()),
             reason: sanitize_message(reason),
             status_code,
         },
@@ -1216,6 +1212,61 @@ mod tests {
         assert_eq!(failovers[0].from_provider, "provider:bad");
         assert_eq!(failovers[0].to_provider.as_deref(), Some("provider:good"));
         assert_eq!(failovers[0].status_code, Some(429));
+        stop_proxy(&home).unwrap();
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    #[tokio::test]
+    async fn proxy_does_not_record_failover_when_disabled() {
+        let _guard = TEST_PROXY_MUTEX.lock().await;
+        let home = temp_home("no-failover");
+        let bad = start_mock_upstream(StatusCode::TOO_MANY_REQUESTS).await;
+        let port = available_port().await;
+        save_proxy_config(
+            &home,
+            &ProxyConfig {
+                enabled: true,
+                port,
+                routing: RoutingPolicy {
+                    request_provider_id: Some("provider:bad".to_string()),
+                    automatic_failover: false,
+                    max_retries: 2,
+                    allow_third_party_failover: true,
+                    ..RoutingPolicy::default()
+                },
+                ..ProxyConfig::default()
+            },
+        )
+        .unwrap();
+        providers::save_provider(
+            &home,
+            ProviderConfig {
+                id: "provider:bad".to_string(),
+                name: "provider:bad".to_string(),
+                kind: ProviderKind::CustomChatCompletions,
+                enabled: true,
+                base_url: format!("{}/v1", bad),
+                account_name: None,
+                api_key: Some("sk-test".to_string()),
+                model_map: None,
+                include_in_failover: true,
+                health: ProviderHealth {
+                    status: ProviderHealthStatus::Healthy,
+                    ..ProviderHealth::default()
+                },
+            },
+        )
+        .unwrap();
+
+        let state = start_proxy(home.clone()).await.unwrap();
+        let response = reqwest::Client::new()
+            .post(format!("{}/v1/responses", state.listen_url.unwrap()))
+            .json(&serde_json::json!({ "model": "gpt-4.1", "input": "hello", "stream": false }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), reqwest::StatusCode::BAD_GATEWAY);
+        assert!(load_failovers(&home).is_empty());
         stop_proxy(&home).unwrap();
         let _ = std::fs::remove_dir_all(home);
     }
