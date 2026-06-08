@@ -4,7 +4,6 @@ import {
   Menu,
   Minus,
   PanelLeftClose,
-  RefreshCw,
   Save,
   Settings,
   Square,
@@ -26,8 +25,6 @@ export default function TitleBar({ sidebarCollapsed, onToggleSidebar, onOpenSett
   const activeAccount = useAppStore((s) => s.activeAccount)
   const accounts = useAppStore((s) => s.accounts)
   const authStatus = useAppStore((s) => s.authStatus)
-  const isRefreshingAuth = useAppStore((s) => s.isRefreshingAuth)
-  const refreshAuth = useAppStore((s) => s.refreshAuth)
   const saveActive = useAppStore((s) => s.saveActive)
 
   const active = accounts.find((account) => account.name === activeAccount) ?? null
@@ -95,13 +92,6 @@ export default function TitleBar({ sidebarCollapsed, onToggleSidebar, onOpenSett
       </div>
 
       <div className="flex items-center h-full">
-        <TitleButton
-          title="刷新状态"
-          onClick={() => void refreshAuth()}
-          disabled={isRefreshingAuth}
-        >
-          <RefreshCw className={cn('w-3.5 h-3.5', isRefreshingAuth && 'animate-spin')} />
-        </TitleButton>
         <TitleButton title="保存当前账号状态" onClick={() => void saveActive()}>
           <Save className="w-3.5 h-3.5" />
         </TitleButton>

@@ -1,7 +1,7 @@
-import { BarChart3, Settings, Users } from 'lucide-react'
+import { BarChart3, RadioTower, Settings, Users } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
-export type AppPage = 'accounts' | 'analytics'
+export type AppPage = 'accounts' | 'routing' | 'analytics'
 
 interface Props {
   collapsed: boolean
@@ -33,6 +33,13 @@ export default function AppSidebar({ collapsed, page, onPageChange, onOpenSettin
           icon={<BarChart3 className="w-4 h-4" />}
           label="用量分析"
           onClick={() => onPageChange('analytics')}
+        />
+        <NavButton
+          collapsed={collapsed}
+          active={page === 'routing'}
+          icon={<RadioTower className="w-4 h-4" />}
+          label="路由代理"
+          onClick={() => onPageChange('routing')}
         />
       </nav>
 

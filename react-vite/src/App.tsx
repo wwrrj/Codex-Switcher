@@ -6,6 +6,7 @@ import TitleBar from '@/components/TitleBar'
 import AppSidebar, { type AppPage } from '@/components/AppSidebar'
 import MainArea from '@/components/MainArea'
 import UsageAnalyticsPage from '@/components/UsageAnalyticsPage'
+import ProxyRoutingPage from '@/components/ProxyRoutingPage'
 import SettingsDrawer from '@/components/SettingsDrawer'
 import AddAccountDialog from '@/components/AddAccountDialog'
 import DeleteAccountDialog from '@/components/DeleteAccountDialog'
@@ -187,8 +188,10 @@ function MainApp() {
             onDelete={handleDelete}
             onAddAccount={() => setAddOpen(true)}
           />
-        ) : (
+        ) : page === 'analytics' ? (
           <UsageAnalyticsPage />
+        ) : (
+          <ProxyRoutingPage />
         )}
       </div>
 
