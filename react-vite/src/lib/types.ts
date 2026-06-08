@@ -218,12 +218,22 @@ export interface FailoverEvent {
   replaySafe?: boolean;
 }
 
+export type ProxyRequestCategory =
+  | "inference"
+  | "codex_backend"
+  | "mobile_residency"
+  | "telemetry"
+  | "remote_control"
+  | "models"
+  | "unknown";
+
 export interface ProxyRequestEvent {
   id: string;
   time: string;
   provider?: string;
   method: string;
   path: string;
+  category: ProxyRequestCategory;
   statusCode?: number;
   success: boolean;
   attempts: number;
@@ -250,11 +260,32 @@ export interface CodexProxyConfigStatus {
   error?: string;
 }
 
+export interface ProxyRuntimeDiagnostics {
+  runtimeActive: boolean;
+  portReachable: boolean;
+  configEnabled: boolean;
+  codexConfigInstalled: boolean;
+  configInstallRequested: boolean;
+}
+
+export interface ProxyTestResult {
+  targetProvider?: string;
+  actualProvider?: string;
+  method: string;
+  path: string;
+  statusCode?: number;
+  success: boolean;
+  durationMs: number;
+  failoverHappened: boolean;
+  error?: string;
+}
+
 export interface ProxyState {
   status: "running" | "stopped" | "error";
   listenUrl?: string;
   config: ProxyConfig;
   codexConfig: CodexProxyConfigStatus;
+  diagnostics: ProxyRuntimeDiagnostics;
   requestProvider?: PublicProviderConfig;
   providers: PublicProviderConfig[];
   mobileResidency: MobileResidencyState;

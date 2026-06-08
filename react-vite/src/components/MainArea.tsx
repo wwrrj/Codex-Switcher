@@ -1,6 +1,8 @@
+import { useState } from 'react'
 import { RefreshCw, ArrowRightLeft, Pencil, Trash2, ExternalLink, AlertTriangle, Key, CheckCircle2, Calendar, Clock, Users, Activity, Star, Plus, ShieldCheck, ShieldAlert, History, Smartphone, RadioTower } from 'lucide-react'
 import { useAppStore } from '@/store/appStore'
 import { getSmartSwitchRecommendation } from '@/lib/api'
+import type { ProxyTestResult } from '@/lib/types'
 import UsageWindowCard from './UsageWindowCard'
 import RefreshAllProgress from './RefreshAllProgress'
 import SubscriptionBadge from './SubscriptionBadge'
@@ -38,6 +40,9 @@ export default function MainArea({ onRename, onDelete, onAddAccount }: Props) {
   const installProxyConfig = useAppStore((s) => s.installProxyConfig)
   const restoreProxyConfig = useAppStore((s) => s.restoreProxyConfig)
   const updateProxyConfig = useAppStore((s) => s.updateProxyConfig)
+  const sendProxyTestRequest = useAppStore((s) => s.sendProxyTestRequest)
+  const [testingProxy, setTestingProxy] = useState(false)
+  const [proxyTestResult, setProxyTestResult] = useState<ProxyTestResult | null>(null)
 
   const account = accounts.find((a) => a.name === activeAccount)
     ?? accounts.find((a) => a.name === selectedAccount)
@@ -70,6 +75,17 @@ export default function MainArea({ onRename, onDelete, onAddAccount }: Props) {
   const diskName = residency.diskAccount ?? activeAccount ?? '—'
   const requestProvider = proxyState.requestProvider
   const routePoolCount = proxyState.providers.filter((provider) => provider.enabled && provider.includeInFailover).length
+  const latestInferenceRequest = proxyState.recentRequests.find((request) => request.category === 'inference')
+  const latestBackgroundRequest = proxyState.recentRequests.find((request) => request.category !== 'inference')
+  const proxyStatusText = proxyState.status === 'running' ? proxyState.listenUrl ?? '运行中' : proxyState.status === 'error' ? '状态异常' : '未运行'
+  const runProxyTest = async () => {
+    setTestingProxy(true)
+    try {
+      setProxyTestResult(await sendProxyTestRequest())
+    } finally {
+      setTestingProxy(false)
+    }
+  }
 
   return (
     <main data-component="MainArea" className="flex-1 overflow-y-auto min-w-0">
@@ -168,7 +184,12 @@ export default function MainArea({ onRename, onDelete, onAddAccount }: Props) {
                 </div>
                 {residency.enabled && residency.accountName && requestName !== residency.accountName && (
                   <p className="text-[11px] text-primary mt-2">
-                    移动端驻留已启用：手机远程连接保持在 {residency.accountName}，请求出口当前为 {requestName}。
+                    后台/手机远程请求走驻留账号 {residency.accountName}，推理请求走请求出口 {requestName}。
+                  </p>
+                )}
+                {residency.enabled && !proxyState.codexConfig.installed && (
+                  <p className="text-[11px] text-warning mt-2">
+                    驻留只保持磁盘账号，Codex 未接管时模型请求不会走代理。
                   </p>
                 )}
                 {residency.warnings.length > 0 && (
@@ -242,8 +263,13 @@ export default function MainArea({ onRename, onDelete, onAddAccount }: Props) {
             <div className="space-y-2">
               <ProxyMetric
                 label="运行状态"
-                value={proxyState.status === 'running' ? proxyState.listenUrl ?? '运行中' : '未运行'}
-                tone={proxyState.status === 'running' ? 'success' : proxyState.config.enabled ? 'warning' : undefined}
+                value={proxyStatusText}
+                tone={proxyState.status === 'running' ? 'success' : proxyState.status === 'error' ? 'warning' : undefined}
+              />
+              <ProxyMetric
+                label="真实监听"
+                value={proxyState.diagnostics.portReachable ? '端口可达' : '端口不可达'}
+                tone={proxyState.diagnostics.portReachable ? 'success' : proxyState.config.enabled ? 'warning' : undefined}
               />
               <ProxyMetric
                 label="Codex 接管"
@@ -315,29 +341,60 @@ export default function MainArea({ onRename, onDelete, onAddAccount }: Props) {
                     恢复配置
                   </button>
                 </div>
+                <button
+                  onClick={() => void runProxyTest()}
+                  disabled={proxyState.status !== 'running' || testingProxy}
+                  className="w-full px-2 py-1.5 rounded-md text-[11px] font-medium text-white bg-primary hover:bg-primary-hover disabled:opacity-50 disabled:hover:bg-primary transition-colors"
+                >
+                  <RefreshCw className={cn('inline w-3 h-3 mr-1', testingProxy && 'animate-spin')} />
+                  {testingProxy ? '测试中' : '发送测试请求'}
+                </button>
+                {proxyTestResult && (
+                  <div className="rounded-md bg-bg border border-line-subtle px-2 py-1.5 text-[10px] text-fg-subtle space-y-0.5">
+                    <p className="text-fg">测试结果：{proxyTestResult.success ? '成功' : '失败'} · {proxyTestResult.statusCode ?? '无状态码'}</p>
+                    <p>目标：{proxyTestResult.targetProvider ?? '默认路由'} · 实际：{proxyTestResult.actualProvider ?? '未知'}</p>
+                    <p>{proxyTestResult.method} · {proxyTestResult.path} · {proxyTestResult.durationMs}ms{proxyTestResult.failoverHappened ? ' · 已故障转移' : ''}</p>
+                  </div>
+                )}
               </div>
-              {proxyState.recentRequests[0] && (
+              {latestInferenceRequest ? (
                 <div className="rounded-lg bg-bg-elevated/60 border border-line-subtle px-3 py-2">
+                  <p className="text-[10px] text-fg-subtle mb-1">最近推理请求</p>
                   <div className="flex items-center gap-2 text-[11px]">
                     <span
                       className={cn(
                         'w-1.5 h-1.5 rounded-full shrink-0',
-                        proxyState.recentRequests[0].success ? 'bg-success' : 'bg-warning'
+                        latestInferenceRequest.success ? 'bg-success' : 'bg-warning'
                       )}
                     />
                     <span className="text-fg truncate min-w-0">
-                      {proxyState.recentRequests[0].method} · {proxyState.recentRequests[0].path}
+                      {latestInferenceRequest.method} · {latestInferenceRequest.path}
                     </span>
                     <span className="text-fg-subtle ml-auto shrink-0">
-                      {proxyState.recentRequests[0].durationMs}ms
+                      {latestInferenceRequest.durationMs}ms
                     </span>
                   </div>
-                  <p className="text-[10px] text-fg-subtle mt-1 truncate" title={proxyState.recentRequests[0].error ?? proxyState.recentRequests[0].provider ?? ''}>
+                  <p className="text-[10px] text-fg-subtle mt-1 truncate" title={latestInferenceRequest.error ?? latestInferenceRequest.provider ?? ''}>
                     {[
-                      proxyState.recentRequests[0].statusCode ?? '无状态码',
-                      proxyState.recentRequests[0].provider ?? '未选择出口',
-                      `${proxyState.recentRequests[0].attempts} 次尝试`,
+                      latestInferenceRequest.statusCode ?? '无状态码',
+                      latestInferenceRequest.provider ?? '未选择出口',
+                      `${latestInferenceRequest.attempts} 次尝试`,
                     ].join(' · ')}
+                  </p>
+                </div>
+              ) : (
+                <div className="rounded-lg bg-bg-elevated/60 border border-line-subtle px-3 py-2">
+                  <p className="text-[10px] text-fg-subtle">暂无推理请求。请用“发送测试请求”或在 Codex 中发起模型请求验证出口。</p>
+                </div>
+              )}
+              {latestBackgroundRequest && (
+                <div className="rounded-lg bg-bg-elevated/40 border border-line-subtle px-3 py-2">
+                  <p className="text-[10px] text-fg-subtle mb-1">最近后台请求</p>
+                  <p className="text-[11px] text-fg truncate" title={latestBackgroundRequest.path}>
+                    {requestCategoryLabel(latestBackgroundRequest.category)} · {latestBackgroundRequest.method} · {latestBackgroundRequest.path}
+                  </p>
+                  <p className="text-[10px] text-fg-subtle mt-1 truncate">
+                    {[latestBackgroundRequest.statusCode ?? '无状态码', latestBackgroundRequest.provider ?? '磁盘账号', `${latestBackgroundRequest.durationMs}ms`].join(' · ')}
                   </p>
                 </div>
               )}
@@ -783,6 +840,16 @@ function providerKindLabel(kind: string): string {
   if (kind === 'deep_seek') return 'DeepSeek'
   if (kind === 'custom_chat_completions') return 'Chat Completions'
   return 'Provider'
+}
+
+function requestCategoryLabel(category: string): string {
+  if (category === 'inference') return '推理'
+  if (category === 'codex_backend') return 'Codex 后台'
+  if (category === 'mobile_residency') return '移动端驻留'
+  if (category === 'remote_control') return '远程控制'
+  if (category === 'telemetry') return 'Telemetry'
+  if (category === 'models') return '模型列表'
+  return '后台'
 }
 
 function tokenExpiryText(kind: string, token: { present: boolean; expiresAt?: string; status: string }): string {

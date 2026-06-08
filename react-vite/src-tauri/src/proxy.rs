@@ -14,7 +14,7 @@ use futures_util::{SinkExt, StreamExt};
 use once_cell::sync::Lazy;
 use reqwest::header::{HeaderName, HeaderValue, AUTHORIZATION, CONTENT_LENGTH, HOST};
 use std::fmt;
-use std::net::SocketAddr;
+use std::net::{SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -102,6 +102,19 @@ fn listen_url_for_config(config: &ProxyConfig) -> String {
     format!("http://{}:{}", config.host, config.port)
 }
 
+fn listen_addr_for_config(config: &ProxyConfig) -> Result<SocketAddr> {
+    format!("{}:{}", config.host, config.port)
+        .parse()
+        .context("代理监听地址无效")
+}
+
+fn is_port_reachable(config: &ProxyConfig) -> bool {
+    let Ok(addr) = listen_addr_for_config(config) else {
+        return false;
+    };
+    TcpStream::connect_timeout(&addr, Duration::from_millis(120)).is_ok()
+}
+
 fn shutdown_runtime_only() {
     if let Some(mut runtime) = RUNTIME.lock().unwrap().take() {
         if let Some(shutdown) = runtime.shutdown.take() {
@@ -175,7 +188,13 @@ fn append_failover(home: &Path, event: FailoverEvent) {
 
 fn load_requests(home: &Path) -> Vec<ProxyRequestEvent> {
     let path = requests_file(home);
-    read_json(&path).unwrap_or_default()
+    let mut events: Vec<ProxyRequestEvent> = read_json(&path).unwrap_or_default();
+    for event in &mut events {
+        if event.category == ProxyRequestCategory::Unknown {
+            event.category = request_category_from_parts(&event.method, &event.path);
+        }
+    }
+    events
 }
 
 fn append_request(home: &Path, event: ProxyRequestEvent) {
@@ -221,22 +240,38 @@ pub fn get_proxy_state(home: &Path) -> Result<ProxyState> {
         disk_account,
         request_provider_name,
     );
-    let runtime = RUNTIME.lock().ok().and_then(|guard| {
-        guard
-            .as_ref()
-            .map(|runtime| (runtime.listen_url.clone(), true))
-    });
-    let status = if runtime.is_some() {
+    let runtime = RUNTIME
+        .lock()
+        .ok()
+        .and_then(|guard| guard.as_ref().map(|runtime| runtime.listen_url.clone()));
+    let runtime_active = runtime.is_some();
+    let port_reachable = is_port_reachable(&config);
+    let codex_config = codex_config::inspect_proxy_config(home, &config.host, config.port);
+
+    let status = if config.enabled && runtime_active && port_reachable {
         ProxyRuntimeStatus::Running
-    } else if config.enabled {
-        ProxyRuntimeStatus::Stopped
+    } else if config.enabled
+        || runtime_active
+        || port_reachable
+        || (config.install_codex_config && !codex_config.installed)
+    {
+        ProxyRuntimeStatus::Error
     } else {
         ProxyRuntimeStatus::Stopped
     };
-    if config.enabled && !runtime.as_ref().is_some_and(|(_, running)| *running) {
+
+    if runtime_active && !config.enabled {
+        warnings.push("代理运行态仍存在，但配置已关闭".to_string());
+    }
+    if config.enabled && !runtime_active {
         warnings.push("代理已启用但当前未运行".to_string());
     }
-    let codex_config = codex_config::inspect_proxy_config(home, &config.host, config.port);
+    if config.enabled && !port_reachable {
+        warnings.push(format!("代理已启用但端口 {} 不可达", config.port));
+    }
+    if !config.enabled && port_reachable {
+        warnings.push(format!("代理未启用但端口 {} 被占用", config.port));
+    }
     if let Some(error) = &codex_config.error {
         warnings.push(error.clone());
     } else if config.install_codex_config && !codex_config.installed {
@@ -245,12 +280,23 @@ pub fn get_proxy_state(home: &Path) -> Result<ProxyState> {
             None => warnings.push("Codex 配置缺少 chatgpt_base_url，未接管到本地代理".to_string()),
         }
     }
+    if config.mobile_residency.enabled && !codex_config.installed {
+        warnings.push("移动端驻留只保持磁盘账号，模型请求不会走代理".to_string());
+    }
+    let diagnostics = ProxyRuntimeDiagnostics {
+        runtime_active,
+        port_reachable,
+        config_enabled: config.enabled,
+        codex_config_installed: codex_config.installed,
+        config_install_requested: config.install_codex_config,
+    };
 
     Ok(ProxyState {
         status,
-        listen_url: runtime.map(|(url, _)| url),
+        listen_url: runtime,
         config,
         codex_config,
+        diagnostics,
         request_provider,
         providers: public_providers,
         mobile_residency,
@@ -271,16 +317,12 @@ pub async fn start_proxy(home: PathBuf) -> Result<ProxyState> {
         .is_some_and(|runtime| runtime.listen_url == desired_listen_url)
     {
         config.enabled = true;
-        codex_config::install_proxy_config(&home, &config.host, config.port)?;
-        config.install_codex_config = true;
         save_proxy_config(&home, &config)?;
         return get_proxy_state(&home);
     }
     shutdown_runtime_only();
 
-    let addr: SocketAddr = format!("{}:{}", config.host, config.port)
-        .parse()
-        .context("代理监听地址无效")?;
+    let addr = listen_addr_for_config(&config)?;
     let state = ProxyAppState {
         home: home.clone(),
         client: reqwest::Client::new(),
@@ -293,8 +335,6 @@ pub async fn start_proxy(home: PathBuf) -> Result<ProxyState> {
         .await
         .with_context(|| format!("代理端口绑定失败: {}", addr))?;
     config.enabled = true;
-    codex_config::install_proxy_config(&home, &config.host, config.port)?;
-    config.install_codex_config = true;
     save_proxy_config(&home, &config)?;
     let (tx, rx) = oneshot::channel();
     let server = axum::serve(listener, app).with_graceful_shutdown(async {
@@ -330,9 +370,7 @@ pub async fn update_proxy_config(home: PathBuf, mut config: ProxyConfig) -> Resu
     if !config.enabled {
         if runtime_url.is_some() {
             shutdown_runtime_only();
-            let _ = codex_config::restore_proxy_config(&home)?;
         }
-        config.install_codex_config = false;
         save_proxy_config(&home, &config)?;
         return get_proxy_state(&home);
     }
@@ -340,7 +378,13 @@ pub async fn update_proxy_config(home: PathBuf, mut config: ProxyConfig) -> Resu
     save_proxy_config(&home, &config)?;
     if runtime_url.as_deref() != Some(desired_listen_url.as_str()) {
         shutdown_runtime_only();
-        return start_proxy(home).await;
+        let state = start_proxy(home.clone()).await?;
+        let config = load_proxy_config(&home)?;
+        if config.install_codex_config {
+            codex_config::install_proxy_config(&home, &config.host, config.port)?;
+            return get_proxy_state(&home);
+        }
+        return Ok(state);
     }
     if config.install_codex_config {
         codex_config::install_proxy_config(&home, &config.host, config.port)?;
@@ -365,7 +409,13 @@ pub async fn restore_proxy_on_startup(home: PathBuf) -> Result<ProxyState> {
         log::info!("mobile residency restored on startup");
     }
     if config.enabled {
-        return start_proxy(home).await;
+        let state = start_proxy(home.clone()).await?;
+        let config = load_proxy_config(&home)?;
+        if config.install_codex_config {
+            codex_config::install_proxy_config(&home, &config.host, config.port)?;
+            return get_proxy_state(&home);
+        }
+        return Ok(state);
     }
     get_proxy_state(&home)
 }
@@ -374,8 +424,6 @@ pub fn stop_proxy(home: &Path) -> Result<ProxyState> {
     shutdown_runtime_only();
     let mut config = load_proxy_config(home)?;
     config.enabled = false;
-    let _ = codex_config::restore_proxy_config(home)?;
-    config.install_codex_config = false;
     save_proxy_config(home, &config)?;
     get_proxy_state(home)
 }
@@ -522,6 +570,78 @@ pub async fn check_all_provider_health(home: PathBuf) -> Result<ProxyState> {
         check_provider_health(home.clone(), provider_id).await?;
     }
     get_proxy_state(&home)
+}
+
+pub async fn send_proxy_test_request(home: PathBuf) -> Result<ProxyTestResult> {
+    let state = get_proxy_state(&home)?;
+    if !matches!(state.status, ProxyRuntimeStatus::Running) {
+        return Err(anyhow::anyhow!("代理未运行，无法发送测试请求"));
+    }
+    let listen_url = state
+        .listen_url
+        .clone()
+        .ok_or_else(|| anyhow::anyhow!("代理监听地址不可用"))?;
+    let target_provider = state
+        .request_provider
+        .as_ref()
+        .map(|provider| provider.name.clone())
+        .or_else(|| state.mobile_residency.request_provider.clone());
+    let failovers_before = load_failovers(&home).len();
+    let started = Instant::now();
+    let response = reqwest::Client::new()
+        .post(format!("{}/v1/responses", listen_url.trim_end_matches('/')))
+        .json(&serde_json::json!({
+            "model": "gpt-5.4-mini",
+            "input": "Reply only: ok",
+            "stream": false
+        }))
+        .send()
+        .await;
+    let duration_ms = started.elapsed().as_millis();
+    let (status_code, success, error) = match response {
+        Ok(response) => {
+            let status = response.status();
+            let _ = response.bytes().await;
+            (Some(status.as_u16()), status.is_success(), None)
+        }
+        Err(error) => (None, false, Some(sanitize_message(&error.to_string()))),
+    };
+    let latest_event = load_requests(&home)
+        .into_iter()
+        .find(|event| event.category == ProxyRequestCategory::Inference);
+    let failover_happened = load_failovers(&home).len() > failovers_before;
+
+    Ok(ProxyTestResult {
+        target_provider,
+        actual_provider: latest_event
+            .as_ref()
+            .and_then(|event| event.provider.clone()),
+        method: latest_event
+            .as_ref()
+            .map(|event| event.method.clone())
+            .unwrap_or_else(|| "POST".to_string()),
+        path: latest_event
+            .as_ref()
+            .map(|event| event.path.clone())
+            .unwrap_or_else(|| "/v1/responses".to_string()),
+        status_code: latest_event
+            .as_ref()
+            .and_then(|event| event.status_code)
+            .or(status_code),
+        success: latest_event
+            .as_ref()
+            .map(|event| event.success)
+            .unwrap_or(success),
+        duration_ms: latest_event
+            .as_ref()
+            .map(|event| event.duration_ms)
+            .unwrap_or(duration_ms),
+        failover_happened,
+        error: latest_event
+            .as_ref()
+            .and_then(|event| event.error.clone())
+            .or(error),
+    })
 }
 
 pub fn install_codex_proxy_config(home: &Path) -> Result<ProxyState> {
@@ -930,7 +1050,15 @@ async fn proxy_request(state: ProxyAppState, req: Request<Body>) -> Result<Respo
 }
 
 fn is_replay_safe_request(method: &Method, path: &str) -> bool {
-    if *method != Method::POST {
+    is_inference_request(method, path)
+}
+
+fn is_inference_request(method: &Method, path: &str) -> bool {
+    is_inference_request_parts(method.as_str(), path)
+}
+
+fn is_inference_request_parts(method: &str, path: &str) -> bool {
+    if method != "POST" {
         return false;
     }
     let normalized = path.trim_end_matches('/');
@@ -1063,6 +1191,7 @@ fn record_request(
             provider,
             method: method.as_str().to_string(),
             path: path.to_string(),
+            category: request_category(method, path),
             status_code,
             success,
             attempts,
@@ -1071,6 +1200,37 @@ fn record_request(
             error: error.map(|msg| sanitize_message(&msg)),
         },
     );
+}
+
+fn request_category(method: &Method, path: &str) -> ProxyRequestCategory {
+    request_category_from_parts(method.as_str(), path)
+}
+
+fn request_category_from_parts(method: &str, path: &str) -> ProxyRequestCategory {
+    let normalized = path.trim_end_matches('/');
+    if normalized.ends_with("/v1/models") || normalized.ends_with("/models") {
+        return ProxyRequestCategory::Models;
+    }
+    if is_inference_request_parts(method, path) {
+        return ProxyRequestCategory::Inference;
+    }
+    if normalized.contains("/analytics-events") {
+        return ProxyRequestCategory::Telemetry;
+    }
+    if normalized.contains("/remote/control") || normalized.contains("/wham/remote") {
+        return ProxyRequestCategory::RemoteControl;
+    }
+    if normalized.contains("/wham/") {
+        return ProxyRequestCategory::MobileResidency;
+    }
+    if normalized == "/api"
+        || normalized.starts_with("/api/")
+        || normalized == "/backend-api"
+        || normalized.starts_with("/backend-api/")
+    {
+        return ProxyRequestCategory::CodexBackend;
+    }
+    ProxyRequestCategory::Unknown
 }
 
 async fn forward_once(
@@ -1989,7 +2149,8 @@ mod tests {
         )
         .unwrap();
 
-        let state = start_proxy(home.clone()).await.unwrap();
+        start_proxy(home.clone()).await.unwrap();
+        let state = install_codex_proxy_config(&home).unwrap();
         assert!(state.codex_config.installed);
         assert_eq!(
             state.codex_config.current_base_url.as_deref(),
@@ -2010,6 +2171,8 @@ mod tests {
         assert_eq!(body["output"][0]["content"][0]["text"], "ok");
 
         let stopped = stop_proxy(&home).unwrap();
+        assert!(stopped.codex_config.installed);
+        let stopped = restore_codex_proxy_config(&home).unwrap();
         assert!(!stopped.codex_config.installed);
         assert_ne!(
             stopped.codex_config.current_base_url.as_deref(),
@@ -2195,7 +2358,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn start_and_stop_proxy_manage_codex_config() {
+    async fn start_stop_and_explicit_codex_config_lifecycle() {
         let _guard = TEST_PROXY_MUTEX.lock().await;
         let home = temp_home("lifecycle");
         std::fs::write(home.join("config.toml"), "model = \"gpt-4.1\"\n").unwrap();
@@ -2212,17 +2375,26 @@ mod tests {
 
         let state = start_proxy(home.clone()).await.unwrap();
         assert!(state.config.enabled);
-        assert!(state.config.install_codex_config);
-        assert!(state.codex_config.installed);
+        assert!(!state.config.install_codex_config);
+        assert!(!state.codex_config.installed);
         let expected = format!("http://127.0.0.1:{port}/backend-api");
+
+        let installed = install_codex_proxy_config(&home).unwrap();
+        assert!(installed.config.install_codex_config);
+        assert!(installed.codex_config.installed);
         assert_eq!(
-            state.codex_config.current_base_url.as_deref(),
+            installed.codex_config.current_base_url.as_deref(),
             Some(expected.as_str())
         );
 
         let stopped = stop_proxy(&home).unwrap();
         assert!(!stopped.config.enabled);
-        assert!(!stopped.config.install_codex_config);
+        assert!(stopped.config.install_codex_config);
+        assert!(stopped.codex_config.installed);
+
+        let restored = restore_codex_proxy_config(&home).unwrap();
+        assert!(!restored.config.install_codex_config);
+        assert!(!restored.codex_config.installed);
         let restored = std::fs::read_to_string(home.join("config.toml")).unwrap();
         assert_eq!(restored, "model = \"gpt-4.1\"\n");
         let _ = std::fs::remove_dir_all(home);
@@ -2912,6 +3084,7 @@ mod tests {
                 provider: Some("a".to_string()),
                 method: "POST".to_string(),
                 path: "/v1/responses".to_string(),
+                category: ProxyRequestCategory::Inference,
                 status_code: Some(200),
                 success: true,
                 attempts: 1,

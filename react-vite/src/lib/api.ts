@@ -1,6 +1,6 @@
 import { invoke } from '@tauri-apps/api/core'
 import { isPermissionGranted, requestPermission, sendNotification } from '@tauri-apps/plugin-notification'
-import type { AccountMeta, CodexAuthStatus, CodexUsageInfo, AppSettings, AppLog, AppState, SubscriptionInfo, SubscriptionPlan, TokenUsageSummary, NewAccountLoginPreparation, SwitchHistoryEntry, SwitchRecommendation, SchedulerConfig, SchedulerHistoryEntry, SchedulerState, ImportAccountsResult, ProxyState, ProviderConfig, ProxyConfig, ProviderModelList } from './types'
+import type { AccountMeta, CodexAuthStatus, CodexUsageInfo, AppSettings, AppLog, AppState, SubscriptionInfo, SubscriptionPlan, TokenUsageSummary, NewAccountLoginPreparation, SwitchHistoryEntry, SwitchRecommendation, SchedulerConfig, SchedulerHistoryEntry, SchedulerState, ImportAccountsResult, ProxyState, ProviderConfig, ProxyConfig, ProviderModelList, ProxyTestResult } from './types'
 
 // ── Frontend-only log management ──
 
@@ -101,6 +101,14 @@ export async function stopProxy(): Promise<ProxyState> {
   const state = await invoke<ProxyState>('stop_proxy')
   addLog('info', '本地代理已停止')
   return state
+}
+
+export async function sendProxyTestRequest(): Promise<ProxyTestResult> {
+  const result = await invoke<ProxyTestResult>('send_proxy_test_request')
+  const provider = result.actualProvider ?? result.targetProvider ?? '未知出口'
+  const status = result.statusCode ?? '无状态码'
+  addLog(result.success ? 'success' : 'warning', `请求出口测试：${provider} · ${status}`)
+  return result
 }
 
 export async function installCodexProxyConfig(): Promise<ProxyState> {

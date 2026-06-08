@@ -383,6 +383,22 @@ pub enum ProxyRuntimeStatus {
     Error,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum ProxyRequestCategory {
+    Inference,
+    CodexBackend,
+    MobileResidency,
+    Telemetry,
+    RemoteControl,
+    Models,
+    Unknown,
+}
+
+fn default_proxy_request_category() -> ProxyRequestCategory {
+    ProxyRequestCategory::Unknown
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FailoverEvent {
@@ -405,6 +421,8 @@ pub struct ProxyRequestEvent {
     pub provider: Option<String>,
     pub method: String,
     pub path: String,
+    #[serde(default = "default_proxy_request_category")]
+    pub category: ProxyRequestCategory,
     pub status_code: Option<u16>,
     pub success: bool,
     pub attempts: u8,
@@ -442,12 +460,37 @@ pub struct ProxyState {
     pub listen_url: Option<String>,
     pub config: ProxyConfig,
     pub codex_config: CodexProxyConfigStatus,
+    pub diagnostics: ProxyRuntimeDiagnostics,
     pub request_provider: Option<PublicProviderConfig>,
     pub providers: Vec<PublicProviderConfig>,
     pub mobile_residency: MobileResidencyState,
     pub recent_failovers: Vec<FailoverEvent>,
     pub recent_requests: Vec<ProxyRequestEvent>,
     pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProxyRuntimeDiagnostics {
+    pub runtime_active: bool,
+    pub port_reachable: bool,
+    pub config_enabled: bool,
+    pub codex_config_installed: bool,
+    pub config_install_requested: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProxyTestResult {
+    pub target_provider: Option<String>,
+    pub actual_provider: Option<String>,
+    pub method: String,
+    pub path: String,
+    pub status_code: Option<u16>,
+    pub success: bool,
+    pub duration_ms: u128,
+    pub failover_happened: bool,
+    pub error: Option<String>,
 }
 
 // ── App types ──

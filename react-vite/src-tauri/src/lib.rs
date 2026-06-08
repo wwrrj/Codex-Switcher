@@ -93,6 +93,7 @@ pub fn run() {
             clear_proxy_events,
             check_provider_health,
             check_all_provider_health,
+            send_proxy_test_request,
             install_codex_proxy_config,
             restore_codex_proxy_config,
             set_mobile_residency_account,

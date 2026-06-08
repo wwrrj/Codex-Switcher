@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { AccountMeta, CodexAuthStatus, AppLog, AppSettings, RefreshProgress, ToastItem, SubscriptionPlan, CodexUsageInfo, DailyUsageEntry, TokenUsageSummary, SwitchHistoryEntry, SchedulerConfig, SchedulerState, ProxyState, ProviderConfig, ProxyConfig, ProviderModelList } from '@/lib/types'
+import type { AccountMeta, CodexAuthStatus, AppLog, AppSettings, RefreshProgress, ToastItem, SubscriptionPlan, CodexUsageInfo, DailyUsageEntry, TokenUsageSummary, SwitchHistoryEntry, SchedulerConfig, SchedulerState, ProxyState, ProviderConfig, ProxyConfig, ProviderModelList, ProxyTestResult } from '@/lib/types'
 import * as api from '@/lib/api'
 import * as usageDb from '@/lib/usageDb'
 
@@ -61,6 +61,13 @@ const defaultProxyState: ProxyState = {
     backupExists: false,
     installed: false,
     expectedBaseUrl: 'http://127.0.0.1:14550/backend-api',
+  },
+  diagnostics: {
+    runtimeActive: false,
+    portReachable: false,
+    configEnabled: false,
+    codexConfigInstalled: false,
+    configInstallRequested: false,
   },
   providers: [],
   mobileResidency: {
@@ -204,6 +211,7 @@ interface AppStore {
   updateProxyConfig: (config: ProxyConfig) => Promise<void>
   startProxy: () => Promise<void>
   stopProxy: () => Promise<void>
+  sendProxyTestRequest: () => Promise<ProxyTestResult>
   installProxyConfig: () => Promise<void>
   restoreProxyConfig: () => Promise<void>
   setRequestProvider: (providerId?: string) => Promise<void>
@@ -679,6 +687,18 @@ export const useAppStore = create<AppStore>((set, get) => ({
       get().addToast('success', '本地代理已停止')
     } catch (e: unknown) {
       get().addToast('error', e instanceof Error ? e.message : '停止代理失败')
+    }
+  },
+
+  sendProxyTestRequest: async () => {
+    try {
+      const result = await api.sendProxyTestRequest()
+      set({ proxyState: await api.getProxyState(), logs: api.getLogs() })
+      get().addToast(result.success ? 'success' : 'warning', `测试请求完成：${result.statusCode ?? '无状态码'}`)
+      return result
+    } catch (e: unknown) {
+      get().addToast('error', e instanceof Error ? e.message : '发送测试请求失败')
+      throw e
     }
   },
 
