@@ -57,6 +57,8 @@ export default function MainArea({ onRename, onDelete, onAddAccount }: Props) {
   const residency = proxyState.mobileResidency
   const requestName = proxyState.requestProvider?.name ?? activeAccount ?? '—'
   const diskName = residency.diskAccount ?? activeAccount ?? '—'
+  const requestProvider = proxyState.requestProvider
+  const routePoolCount = proxyState.providers.filter((provider) => provider.enabled && provider.includeInFailover).length
 
   return (
     <main data-component="MainArea" className="flex-1 overflow-y-auto min-w-0">
@@ -193,6 +195,71 @@ export default function MainArea({ onRename, onDelete, onAddAccount }: Props) {
                 </button>
               )}
             </div>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-5 gap-4">
+          <div className="col-span-2 rounded-xl border border-line bg-bg-surface card-ring p-4">
+            <div className="flex items-center gap-2 mb-3">
+              <RadioTower className="w-3.5 h-3.5 text-primary" />
+              <h2 className="text-sm font-semibold text-fg font-serif">代理状态</h2>
+            </div>
+            <div className="space-y-2">
+              <ProxyMetric
+                label="运行状态"
+                value={proxyState.status === 'running' ? proxyState.listenUrl ?? '运行中' : '未运行'}
+                tone={proxyState.status === 'running' ? 'success' : proxyState.config.enabled ? 'warning' : undefined}
+              />
+              <ProxyMetric
+                label="Codex 接管"
+                value={proxyState.codexConfig.installed ? '已接管' : '未接管'}
+                tone={proxyState.codexConfig.installed ? 'success' : proxyState.config.installCodexConfig ? 'warning' : undefined}
+              />
+              <ProxyMetric
+                label="自动故障转移"
+                value={proxyState.config.routing.automaticFailover ? `已启用 · ${routePoolCount} 个出口` : '未启用'}
+                tone={proxyState.config.routing.automaticFailover ? 'success' : undefined}
+              />
+              <ProxyMetric
+                label="当前出口"
+                value={requestProvider ? `${requestProvider.name} · ${providerHealthText(requestProvider.health.status)}` : requestName}
+                tone={requestProvider?.health.status === 'cooling_down' || requestProvider?.health.status === 'invalid' ? 'warning' : undefined}
+              />
+            </div>
+          </div>
+
+          <div className="col-span-3 rounded-xl border border-line bg-bg-surface card-ring p-4">
+            <div className="flex items-center justify-between gap-3 mb-3">
+              <div className="flex items-center gap-2">
+                <History className="w-3.5 h-3.5 text-fg-muted" />
+                <h2 className="text-sm font-semibold text-fg font-serif">最近故障转移</h2>
+              </div>
+              <span className="text-[10px] text-fg-subtle">
+                最多保留 50 条
+              </span>
+            </div>
+            {proxyState.recentFailovers.length > 0 ? (
+              <div className="space-y-2">
+                {proxyState.recentFailovers.slice(0, 3).map((event) => (
+                  <div key={event.id} className="rounded-lg bg-bg-elevated/60 border border-line-subtle px-3 py-2">
+                    <div className="flex items-center gap-2 text-[11px]">
+                      <span className="w-1.5 h-1.5 rounded-full bg-warning shrink-0" />
+                      <span className="text-fg truncate min-w-0">
+                        {event.fromProvider} → {event.toProvider ?? '无可用出口'}
+                      </span>
+                      <span className="text-fg-subtle ml-auto shrink-0">{formatDate(event.time)}</span>
+                    </div>
+                    <p className="text-[10px] text-fg-subtle mt-1 truncate" title={event.reason}>
+                      {event.statusCode ? `${event.statusCode} · ` : ''}{event.reason}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="text-[11px] text-fg-subtle">
+                暂无故障转移记录。只有代理请求遇到配额、限速、鉴权或容量问题时才会记录。
+              </p>
+            )}
           </div>
         </div>
 
@@ -502,6 +569,23 @@ function ResidencyMetric({ label, value }: { label: string; value: string }) {
   )
 }
 
+function ProxyMetric({ label, value, tone }: { label: string; value: string; tone?: 'success' | 'warning' }) {
+  return (
+    <div className="flex items-center justify-between gap-3 rounded-lg bg-bg-elevated/60 border border-line-subtle px-2.5 py-2">
+      <span className="text-[10px] text-fg-subtle shrink-0">{label}</span>
+      <span
+        className={cn(
+          'text-[11px] font-medium truncate text-right',
+          tone === 'success' ? 'text-success' : tone === 'warning' ? 'text-warning' : 'text-fg'
+        )}
+        title={value}
+      >
+        {value}
+      </span>
+    </div>
+  )
+}
+
 function MetaRow({ icon, label, value }: { icon: React.ReactNode; label: string; value: string }) {
   return (
     <div className="flex items-center justify-between text-[11px]">
@@ -517,6 +601,14 @@ function MetaRow({ icon, label, value }: { icon: React.ReactNode; label: string;
 function tokenLabel(kind: string): string {
   if (kind === 'access_token') return 'Access'
   return kind
+}
+
+function providerHealthText(status: string): string {
+  if (status === 'healthy') return '正常'
+  if (status === 'cooling_down') return '冷却中'
+  if (status === 'disabled') return '已停用'
+  if (status === 'invalid') return '异常'
+  return '待验证'
 }
 
 function tokenExpiryText(kind: string, token: { present: boolean; expiresAt?: string; status: string }): string {
