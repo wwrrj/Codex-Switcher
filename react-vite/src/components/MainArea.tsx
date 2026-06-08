@@ -165,6 +165,13 @@ export default function MainArea({ onRename, onDelete, onAddAccount }: Props) {
                     ))}
                   </div>
                 )}
+                {proxyState.warnings.length > 0 && (
+                  <div className="mt-2 space-y-1">
+                    {proxyState.warnings.map((warning) => (
+                      <p key={warning} className="text-[11px] text-warning">{warning}</p>
+                    ))}
+                  </div>
+                )}
               </div>
             </div>
             <div className="flex gap-2 shrink-0">

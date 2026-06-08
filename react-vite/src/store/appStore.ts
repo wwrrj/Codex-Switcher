@@ -56,6 +56,12 @@ const defaultProxyState: ProxyState = {
       notifyOnError: true,
     },
   },
+  codexConfig: {
+    configExists: false,
+    backupExists: false,
+    installed: false,
+    expectedBaseUrl: 'http://127.0.0.1:14550/backend-api',
+  },
   providers: [],
   mobileResidency: {
     enabled: false,

@@ -395,10 +395,22 @@ pub struct MobileResidencyState {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct CodexProxyConfigStatus {
+    pub config_exists: bool,
+    pub backup_exists: bool,
+    pub installed: bool,
+    pub expected_base_url: String,
+    pub current_base_url: Option<String>,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ProxyState {
     pub status: ProxyRuntimeStatus,
     pub listen_url: Option<String>,
     pub config: ProxyConfig,
+    pub codex_config: CodexProxyConfigStatus,
     pub request_provider: Option<PublicProviderConfig>,
     pub providers: Vec<PublicProviderConfig>,
     pub mobile_residency: MobileResidencyState,

@@ -218,10 +218,20 @@ export interface MobileResidencyState {
   warnings: string[];
 }
 
+export interface CodexProxyConfigStatus {
+  configExists: boolean;
+  backupExists: boolean;
+  installed: boolean;
+  expectedBaseUrl: string;
+  currentBaseUrl?: string;
+  error?: string;
+}
+
 export interface ProxyState {
   status: "running" | "stopped" | "error";
   listenUrl?: string;
   config: ProxyConfig;
+  codexConfig: CodexProxyConfigStatus;
   requestProvider?: PublicProviderConfig;
   providers: PublicProviderConfig[];
   mobileResidency: MobileResidencyState;

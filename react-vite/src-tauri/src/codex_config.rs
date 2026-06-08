@@ -2,6 +2,8 @@ use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 use toml_edit::{value, DocumentMut};
 
+use crate::models::CodexProxyConfigStatus;
+
 fn config_file(home: &Path) -> PathBuf {
     home.join("config.toml")
 }
@@ -61,17 +63,43 @@ pub fn restore_proxy_config(home: &Path) -> Result<bool> {
     Ok(false)
 }
 
-pub fn is_proxy_config_installed(home: &Path, host: &str, port: u16) -> bool {
+pub fn inspect_proxy_config(home: &Path, host: &str, port: u16) -> CodexProxyConfigStatus {
     let path = config_file(home);
-    let Ok(contents) = std::fs::read_to_string(path) else {
-        return false;
+    let backup = backup_file(home);
+    let expected = proxy_base_url(host, port);
+    let config_exists = path.exists();
+    let backup_exists = backup.exists();
+    let mut status = CodexProxyConfigStatus {
+        config_exists,
+        backup_exists,
+        installed: false,
+        expected_base_url: expected.clone(),
+        current_base_url: None,
+        error: None,
     };
-    let Ok(doc) = contents.parse::<DocumentMut>() else {
-        return false;
+    if !config_exists {
+        return status;
+    }
+    let contents = match std::fs::read_to_string(&path) {
+        Ok(contents) => contents,
+        Err(error) => {
+            status.error = Some(format!("读取 config.toml 失败：{error}"));
+            return status;
+        }
     };
-    doc.get("chatgpt_base_url")
+    let doc = match contents.parse::<DocumentMut>() {
+        Ok(doc) => doc,
+        Err(error) => {
+            status.error = Some(format!("解析 config.toml 失败：{error}"));
+            return status;
+        }
+    };
+    status.current_base_url = doc
+        .get("chatgpt_base_url")
         .and_then(|item| item.as_str())
-        .is_some_and(|url| url == proxy_base_url(host, port))
+        .map(str::to_string);
+    status.installed = status.current_base_url.as_deref() == Some(expected.as_str());
+    status
 }
 
 #[cfg(test)]
@@ -98,6 +126,25 @@ mod tests {
         restore_proxy_config(&home).unwrap();
         let restored = std::fs::read_to_string(home.join("config.toml")).unwrap();
         assert_eq!(restored, "model = \"gpt-4.1\"\n");
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    #[test]
+    fn inspect_reports_current_and_expected_proxy_url() {
+        let home = temp_home();
+        std::fs::write(
+            home.join("config.toml"),
+            "chatgpt_base_url = \"http://127.0.0.1:14550/backend-api\"\n",
+        )
+        .unwrap();
+        let status = inspect_proxy_config(&home, "127.0.0.1", 14550);
+        assert!(status.config_exists);
+        assert!(status.installed);
+        assert_eq!(
+            status.current_base_url.as_deref(),
+            Some("http://127.0.0.1:14550/backend-api")
+        );
+        assert_eq!(status.expected_base_url, status.current_base_url.unwrap());
         let _ = std::fs::remove_dir_all(home);
     }
 }

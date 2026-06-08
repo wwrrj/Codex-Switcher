@@ -134,16 +134,21 @@ pub fn get_proxy_state(home: &Path) -> Result<ProxyState> {
     if config.enabled && !runtime.as_ref().is_some_and(|(_, running)| *running) {
         warnings.push("代理已启用但当前未运行".to_string());
     }
-    if config.install_codex_config
-        && !codex_config::is_proxy_config_installed(home, &config.host, config.port)
-    {
-        warnings.push("Codex 配置尚未接管到本地代理".to_string());
+    let codex_config = codex_config::inspect_proxy_config(home, &config.host, config.port);
+    if let Some(error) = &codex_config.error {
+        warnings.push(error.clone());
+    } else if config.install_codex_config && !codex_config.installed {
+        match &codex_config.current_base_url {
+            Some(url) => warnings.push(format!("Codex 配置当前指向 {url}，未接管到本地代理")),
+            None => warnings.push("Codex 配置缺少 chatgpt_base_url，未接管到本地代理".to_string()),
+        }
     }
 
     Ok(ProxyState {
         status,
         listen_url: runtime.map(|(url, _)| url),
         config,
+        codex_config,
         request_provider,
         providers: public_providers,
         mobile_residency,

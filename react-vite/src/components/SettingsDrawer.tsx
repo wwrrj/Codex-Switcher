@@ -206,6 +206,16 @@ export default function SettingsDrawer({ open, onClose }: Props) {
                     {proxyState.status === 'running' ? `运行中：${proxyState.listenUrl}` : '未运行'}
                   </p>
                 </div>
+                <span
+                  className={cn(
+                    'rounded-full px-2 py-0.5 text-[10px]',
+                    proxyState.codexConfig.installed
+                      ? 'text-success bg-success-muted'
+                      : 'text-warning bg-warning-muted'
+                  )}
+                >
+                  {proxyState.codexConfig.installed ? 'Codex 已接管' : 'Codex 未接管'}
+                </span>
                 <button
                   onClick={() => void (proxyState.status === 'running' ? stopProxy() : startProxy())}
                   className={cn(
@@ -215,6 +225,34 @@ export default function SettingsDrawer({ open, onClose }: Props) {
                 >
                   {proxyState.status === 'running' ? '停止代理' : '启动代理'}
                 </button>
+              </div>
+              <div className="rounded-md bg-bg-elevated/60 border border-line-subtle px-3 py-2 space-y-1">
+                <div className="flex justify-between gap-3 text-[11px]">
+                  <span className="text-fg-muted">期望地址</span>
+                  <span className="text-fg truncate" title={proxyState.codexConfig.expectedBaseUrl}>
+                    {proxyState.codexConfig.expectedBaseUrl}
+                  </span>
+                </div>
+                <div className="flex justify-between gap-3 text-[11px]">
+                  <span className="text-fg-muted">当前地址</span>
+                  <span className="text-fg truncate" title={proxyState.codexConfig.currentBaseUrl ?? '未设置'}>
+                    {proxyState.codexConfig.currentBaseUrl ?? '未设置'}
+                  </span>
+                </div>
+                <div className="flex justify-between gap-3 text-[11px]">
+                  <span className="text-fg-muted">配置备份</span>
+                  <span className="text-fg">{proxyState.codexConfig.backupExists ? '已创建' : '无备份'}</span>
+                </div>
+                {proxyState.codexConfig.error && (
+                  <p className="text-[11px] text-warning">{proxyState.codexConfig.error}</p>
+                )}
+                {proxyState.warnings.length > 0 && (
+                  <div className="space-y-0.5">
+                    {proxyState.warnings.map((warning) => (
+                      <p key={warning} className="text-[11px] text-warning">{warning}</p>
+                    ))}
+                  </div>
+                )}
               </div>
               <div className="flex gap-2">
                 <button
