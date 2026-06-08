@@ -28,6 +28,43 @@ const providerKindLabel: Record<ProviderKind, string> = {
   custom_chat_completions: 'Chat Completions',
 }
 
+const providerBaseUrlPresets: Record<ProviderKind, Array<{ label: string; url: string }>> = {
+  chat_gpt_oauth: [
+    { label: 'ChatGPT Backend API', url: 'https://chatgpt.com/backend-api' },
+  ],
+  open_ai_api_key: [
+    { label: 'OpenAI 官方', url: 'https://api.openai.com/v1' },
+  ],
+  open_ai_compatible: [
+    { label: 'OpenRouter', url: 'https://openrouter.ai/api/v1' },
+    { label: 'SiliconFlow', url: 'https://api.siliconflow.cn/v1' },
+    { label: 'Kimi / Moonshot 中国区', url: 'https://api.moonshot.cn/v1' },
+    { label: 'Kimi / Moonshot 国际区', url: 'https://api.moonshot.ai/v1' },
+  ],
+  glm: [
+    { label: 'Z.AI Coding Plan', url: 'https://api.z.ai/api/coding/paas/v4' },
+    { label: 'Z.AI 通用 API', url: 'https://api.z.ai/api/paas/v4' },
+    { label: '智谱旧版 BigModel', url: 'https://open.bigmodel.cn/api/paas/v4' },
+  ],
+  mimo: [
+    { label: 'MiMo API', url: 'https://api.mimo-v2.com/v1' },
+    { label: 'MiMo Token Plan SGP', url: 'https://token-plan-sgp.xiaomimimo.com/v1' },
+  ],
+  deep_seek: [
+    { label: 'DeepSeek 官方', url: 'https://api.deepseek.com/v1' },
+  ],
+  custom_chat_completions: [
+    { label: '本地 OpenAI-compatible', url: 'http://127.0.0.1:8000/v1' },
+    { label: 'Ollama OpenAI-compatible', url: 'http://127.0.0.1:11434/v1' },
+  ],
+}
+
+const allProviderPresetUrls = new Set(
+  Object.values(providerBaseUrlPresets)
+    .flat()
+    .map((preset) => preset.url),
+)
+
 function providerHealthLabel(provider: PublicProviderConfig): string {
   if (provider.health.status === 'cooling_down') return '冷却中'
   if (provider.health.status === 'healthy') return '正常'
@@ -65,6 +102,10 @@ function modelMapFromModels(models: string[]): string {
   const lines = [`# 读取到 ${models.length} 个模型：${models.slice(0, 12).join(', ')}${models.length > 12 ? ' ...' : ''}`]
   lines.push(...codexModelAliases.map((alias) => `${alias}=${preferred}`))
   return lines.join('\n')
+}
+
+function defaultProviderBaseUrl(kind: ProviderKind): string {
+  return providerBaseUrlPresets[kind][0]?.url ?? ''
 }
 
 interface Props {
@@ -124,6 +165,15 @@ export default function SettingsDrawer({ open, onClose }: Props) {
     return () => window.removeEventListener('keydown', handleEsc)
   }, [open, onClose])
 
+  useEffect(() => {
+    if (editingProviderId) return
+    setProviderBaseUrl((current) => {
+      const trimmed = current.trim()
+      if (trimmed && !allProviderPresetUrls.has(trimmed)) return current
+      return defaultProviderBaseUrl(providerKind)
+    })
+  }, [editingProviderId, providerKind])
+
   const handleSave = async () => {
     await updateSettings(form)
     onClose()
@@ -133,16 +183,18 @@ export default function SettingsDrawer({ open, onClose }: Props) {
     setForm({ ...defaultSettings })
   }
 
+  const handleProviderKindChange = (kind: ProviderKind) => {
+    setProviderKind(kind)
+    setFetchedModelsInfo('')
+  }
+
+  const handlePresetBaseUrlChange = (url: string) => {
+    if (!url) return
+    setProviderBaseUrl(url)
+    setFetchedModelsInfo('')
+  }
+
   const handleSaveProvider = async () => {
-    const fallbackBaseUrl: Record<ProviderKind, string> = {
-      chat_gpt_oauth: 'https://chatgpt.com/backend-api',
-      open_ai_api_key: 'https://api.openai.com/v1',
-      open_ai_compatible: 'https://example.com/v1',
-      glm: 'https://open.bigmodel.cn/api/paas/v4',
-      mimo: 'https://api.mimo.example/v1',
-      deep_seek: 'https://api.deepseek.com/v1',
-      custom_chat_completions: 'https://example.com/v1',
-    }
     const name = providerName.trim() || providerKind
     const modelMap = parseModelMap(providerModelMap)
     const existingProvider = editingProviderId
@@ -153,7 +205,7 @@ export default function SettingsDrawer({ open, onClose }: Props) {
       name,
       kind: providerKind,
       enabled: existingProvider?.enabled ?? true,
-      baseUrl: providerBaseUrl.trim() || fallbackBaseUrl[providerKind],
+      baseUrl: providerBaseUrl.trim() || defaultProviderBaseUrl(providerKind),
       apiKey: providerApiKey.trim() || undefined,
       modelMap: Object.keys(modelMap).length > 0 ? modelMap : undefined,
       includeInFailover: existingProvider?.includeInFailover ?? true,
@@ -163,16 +215,7 @@ export default function SettingsDrawer({ open, onClose }: Props) {
   }
 
   const handleFetchProviderModels = async () => {
-    const fallbackBaseUrl: Record<ProviderKind, string> = {
-      chat_gpt_oauth: 'https://chatgpt.com/backend-api',
-      open_ai_api_key: 'https://api.openai.com/v1',
-      open_ai_compatible: 'https://example.com/v1',
-      glm: 'https://open.bigmodel.cn/api/paas/v4',
-      mimo: 'https://api.mimo.example/v1',
-      deep_seek: 'https://api.deepseek.com/v1',
-      custom_chat_completions: 'https://example.com/v1',
-    }
-    const baseUrl = providerBaseUrl.trim() || fallbackBaseUrl[providerKind]
+    const baseUrl = providerBaseUrl.trim() || defaultProviderBaseUrl(providerKind)
     setFetchingModels(true)
     try {
       const result = await fetchProviderModels(baseUrl, providerApiKey, editingProviderId ?? undefined)
@@ -199,7 +242,7 @@ export default function SettingsDrawer({ open, onClose }: Props) {
   const resetProviderForm = () => {
     setEditingProviderId(null)
     setProviderName('')
-    setProviderBaseUrl('')
+    setProviderBaseUrl(defaultProviderBaseUrl(providerKind))
     setProviderApiKey('')
     setProviderModelMap('')
     setFetchedModelsInfo('')
@@ -232,6 +275,11 @@ export default function SettingsDrawer({ open, onClose }: Props) {
       setCheckingProviderId(null)
     }
   }
+
+  const currentBaseUrlPresets = providerBaseUrlPresets[providerKind]
+  const selectedPresetBaseUrl = currentBaseUrlPresets.some((preset) => preset.url === providerBaseUrl.trim())
+    ? providerBaseUrl.trim()
+    : ''
 
   if (!open) return null
 
@@ -490,7 +538,7 @@ export default function SettingsDrawer({ open, onClose }: Props) {
               <div className="grid grid-cols-2 gap-2">
                 <select
                   value={providerKind}
-                  onChange={(event) => setProviderKind(event.target.value as ProviderKind)}
+                  onChange={(event) => handleProviderKindChange(event.target.value as ProviderKind)}
                   className="px-2.5 py-1.5 rounded-md text-xs bg-bg-elevated border border-line text-fg focus:border-primary focus:outline-none"
                 >
                   <option value="open_ai_compatible">OpenAI Relay</option>
@@ -507,10 +555,25 @@ export default function SettingsDrawer({ open, onClose }: Props) {
                   className="px-2.5 py-1.5 rounded-md text-xs bg-bg-elevated border border-line text-fg placeholder:text-fg-subtle focus:border-primary focus:outline-none"
                 />
               </div>
+              <select
+                value={selectedPresetBaseUrl}
+                onChange={(event) => handlePresetBaseUrlChange(event.target.value)}
+                className="w-full px-2.5 py-1.5 rounded-md text-xs bg-bg-elevated border border-line text-fg focus:border-primary focus:outline-none"
+              >
+                <option value="">厂商预设（当前为自定义 Base URL）</option>
+                {currentBaseUrlPresets.map((preset) => (
+                  <option key={preset.url} value={preset.url}>
+                    {preset.label} · {preset.url}
+                  </option>
+                ))}
+              </select>
               <input
                 value={providerBaseUrl}
-                onChange={(event) => setProviderBaseUrl(event.target.value)}
-                placeholder="Base URL，留空使用默认"
+                onChange={(event) => {
+                  setProviderBaseUrl(event.target.value)
+                  setFetchedModelsInfo('')
+                }}
+                placeholder="Base URL，可手动修改"
                 className="w-full px-2.5 py-1.5 rounded-md text-xs bg-bg-elevated border border-line text-fg placeholder:text-fg-subtle focus:border-primary focus:outline-none"
               />
               <input
