@@ -136,8 +136,16 @@ pub fn save_provider(provider_home: &Path, mut provider: ProviderConfig) -> Resu
     if provider.id.trim().is_empty() {
         provider.id = format!("provider:{}", uuid::Uuid::new_v4());
     }
+    provider.api_key = provider
+        .api_key
+        .and_then(|key| (!key.trim().is_empty()).then_some(key));
     provider.health.last_error = provider.health.last_error.map(|msg| mask_secret(&msg));
     let mut providers = load_provider_configs(provider_home)?;
+    if provider.api_key.is_none() {
+        if let Some(existing) = providers.iter().find(|item| item.id == provider.id) {
+            provider.api_key = existing.api_key.clone();
+        }
+    }
     providers.retain(|item| item.id != provider.id);
     providers.push(provider.clone());
     save_provider_configs(provider_home, &providers)?;
@@ -307,6 +315,89 @@ mod tests {
         assert_eq!(providers[0].api_key.as_deref(), Some("sk-secret"));
         assert!(!providers[0].enabled);
         assert!(!providers[0].include_in_failover);
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    #[test]
+    fn save_provider_preserves_existing_secret_when_omitted() {
+        let home =
+            std::env::temp_dir().join(format!("codex-provider-save-{}", uuid::Uuid::new_v4()));
+        save_provider(
+            &home,
+            ProviderConfig {
+                id: "provider:test".to_string(),
+                name: "Relay".to_string(),
+                kind: ProviderKind::OpenAiCompatible,
+                enabled: true,
+                base_url: "https://relay.example/v1".to_string(),
+                account_name: None,
+                api_key: Some("sk-secret".to_string()),
+                model_map: None,
+                include_in_failover: true,
+                health: ProviderHealth::default(),
+            },
+        )
+        .unwrap();
+        save_provider(
+            &home,
+            ProviderConfig {
+                id: "provider:test".to_string(),
+                name: "Relay Updated".to_string(),
+                kind: ProviderKind::OpenAiCompatible,
+                enabled: true,
+                base_url: "https://relay2.example/v1".to_string(),
+                account_name: None,
+                api_key: None,
+                model_map: None,
+                include_in_failover: true,
+                health: ProviderHealth::default(),
+            },
+        )
+        .unwrap();
+        let providers = load_provider_configs(&home).unwrap();
+        assert_eq!(providers[0].name, "Relay Updated");
+        assert_eq!(providers[0].api_key.as_deref(), Some("sk-secret"));
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    #[test]
+    fn save_provider_replaces_secret_when_new_secret_is_present() {
+        let home =
+            std::env::temp_dir().join(format!("codex-provider-replace-{}", uuid::Uuid::new_v4()));
+        save_provider(
+            &home,
+            ProviderConfig {
+                id: "provider:test".to_string(),
+                name: "Relay".to_string(),
+                kind: ProviderKind::OpenAiCompatible,
+                enabled: true,
+                base_url: "https://relay.example/v1".to_string(),
+                account_name: None,
+                api_key: Some("sk-old".to_string()),
+                model_map: None,
+                include_in_failover: true,
+                health: ProviderHealth::default(),
+            },
+        )
+        .unwrap();
+        save_provider(
+            &home,
+            ProviderConfig {
+                id: "provider:test".to_string(),
+                name: "Relay".to_string(),
+                kind: ProviderKind::OpenAiCompatible,
+                enabled: true,
+                base_url: "https://relay.example/v1".to_string(),
+                account_name: None,
+                api_key: Some("sk-new".to_string()),
+                model_map: None,
+                include_in_failover: true,
+                health: ProviderHealth::default(),
+            },
+        )
+        .unwrap();
+        let providers = load_provider_configs(&home).unwrap();
+        assert_eq!(providers[0].api_key.as_deref(), Some("sk-new"));
         let _ = std::fs::remove_dir_all(home);
     }
 
