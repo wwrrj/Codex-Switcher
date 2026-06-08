@@ -126,13 +126,7 @@ fn validate_request_provider(home: &Path, provider_id: &str) -> Result<()> {
         .into_iter()
         .find(|provider| provider.id == provider_id)
         .ok_or_else(|| anyhow::anyhow!("请求出口不存在：{}", provider_id))?;
-    if !provider.enabled {
-        return Err(anyhow::anyhow!("请求出口已停用：{}", provider.name));
-    }
-    if matches!(
-        provider.health.status,
-        ProviderHealthStatus::Disabled | ProviderHealthStatus::Invalid
-    ) {
+    if !routing::is_explicit_provider_available(&provider) {
         return Err(anyhow::anyhow!("请求出口不可用：{}", provider.name));
     }
     Ok(())
@@ -1906,6 +1900,39 @@ mod tests {
             .routing
             .request_provider_id
             .is_none());
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    #[test]
+    fn setting_manual_request_provider_does_not_require_failover_membership() {
+        let home = temp_home("manual-provider-outside-failover");
+        providers::save_provider(
+            &home,
+            ProviderConfig {
+                id: "provider:manual".to_string(),
+                name: "Manual".to_string(),
+                kind: ProviderKind::OpenAiCompatible,
+                enabled: true,
+                base_url: "https://relay.example/v1".to_string(),
+                account_name: None,
+                api_key: Some("sk-test".to_string()),
+                model_map: None,
+                include_in_failover: false,
+                health: ProviderHealth::default(),
+            },
+        )
+        .unwrap();
+
+        set_request_provider(&home, Some("provider:manual".to_string())).unwrap();
+
+        assert_eq!(
+            load_proxy_config(&home)
+                .unwrap()
+                .routing
+                .request_provider_id
+                .as_deref(),
+            Some("provider:manual")
+        );
         let _ = std::fs::remove_dir_all(home);
     }
 

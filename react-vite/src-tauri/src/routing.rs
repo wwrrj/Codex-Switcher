@@ -47,18 +47,8 @@ pub fn classify_failure(status: Option<u16>, body: &str) -> Option<FailureKind> 
     }
 }
 
-pub fn is_provider_available(provider: &ProviderConfig, allow_third_party: bool) -> bool {
-    if !provider.enabled || !provider.include_in_failover {
-        return false;
-    }
-    let is_third_party = matches!(
-        provider.kind,
-        ProviderKind::Glm
-            | ProviderKind::Mimo
-            | ProviderKind::DeepSeek
-            | ProviderKind::CustomChatCompletions
-    );
-    if is_third_party && !allow_third_party {
+pub fn is_explicit_provider_available(provider: &ProviderConfig) -> bool {
+    if !provider.enabled {
         return false;
     }
     if provider.health.status == ProviderHealthStatus::Disabled
@@ -77,6 +67,23 @@ pub fn is_provider_available(provider: &ProviderConfig, allow_third_party: bool)
     true
 }
 
+pub fn is_provider_available(provider: &ProviderConfig, allow_third_party: bool) -> bool {
+    if !is_explicit_provider_available(provider) || !provider.include_in_failover {
+        return false;
+    }
+    let is_third_party = matches!(
+        provider.kind,
+        ProviderKind::Glm
+            | ProviderKind::Mimo
+            | ProviderKind::DeepSeek
+            | ProviderKind::CustomChatCompletions
+    );
+    if is_third_party && !allow_third_party {
+        return false;
+    }
+    true
+}
+
 pub fn choose_provider(
     providers: &[ProviderConfig],
     policy: &RoutingPolicy,
@@ -85,7 +92,7 @@ pub fn choose_provider(
     if let Some(id) = &policy.request_provider_id {
         if let Some(provider) = providers.iter().find(|item| &item.id == id) {
             if !previous_provider_ids.contains(&provider.id)
-                && is_provider_available(provider, policy.allow_third_party_failover)
+                && is_explicit_provider_available(provider)
             {
                 return Some(RouteDecision {
                     provider: provider.clone(),
@@ -220,5 +227,35 @@ mod tests {
         };
         let decision = choose_provider(&[healthy, unknown], &policy, &[]).unwrap();
         assert_eq!(decision.provider.id, "unknown");
+    }
+
+    #[test]
+    fn explicit_request_provider_can_be_outside_failover_pool() {
+        let mut manual = provider("manual", ProviderKind::OpenAiCompatible);
+        manual.include_in_failover = false;
+        let automatic = provider("automatic", ProviderKind::OpenAiCompatible);
+        let policy = RoutingPolicy {
+            request_provider_id: Some("manual".to_string()),
+            ..RoutingPolicy::default()
+        };
+
+        let decision = choose_provider(&[automatic, manual], &policy, &[]).unwrap();
+
+        assert_eq!(decision.provider.id, "manual");
+    }
+
+    #[test]
+    fn explicit_third_party_provider_is_not_blocked_by_failover_gate() {
+        let deepseek = provider("deepseek", ProviderKind::DeepSeek);
+        let oauth = provider("oauth", ProviderKind::ChatGptOauth);
+        let policy = RoutingPolicy {
+            request_provider_id: Some("deepseek".to_string()),
+            allow_third_party_failover: false,
+            ..RoutingPolicy::default()
+        };
+
+        let decision = choose_provider(&[oauth, deepseek], &policy, &[]).unwrap();
+
+        assert_eq!(decision.provider.id, "deepseek");
     }
 }
