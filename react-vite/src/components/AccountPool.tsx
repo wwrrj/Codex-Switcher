@@ -110,11 +110,11 @@ export default function AccountPool({ onAddAccount }: Props) {
             const isConfirming = confirmTarget === acc.name
             const isPriority = !!acc.priority
             const isResidency = proxyState.mobileResidency.accountName === acc.name
-            const supportsResidency = acc.subscription?.plan !== 'api_key'
-              && acc.health !== 'invalid'
-              && acc.health !== 'expired'
-              && acc.authTokens.some((token) => token.kind === 'access_token' && token.present)
-              && acc.authTokens.some((token) => token.kind === 'refresh_token' && token.present)
+            const supportsResidency = proxyState.providers.some((provider) =>
+              provider.id === `account:${acc.name}`
+              && provider.kind === 'chat_gpt_oauth'
+              && provider.enabled
+            )
 
             return (
               <div key={acc.name} className="relative shrink-0">

@@ -123,6 +123,9 @@ pub fn oauth_provider_for_account(account: &AccountMeta) -> ProviderConfig {
 pub fn merged_providers(home: &Path, accounts: &[AccountMeta]) -> Result<Vec<ProviderConfig>> {
     let mut providers: BTreeMap<String, ProviderConfig> = BTreeMap::new();
     for account in accounts {
+        if !is_chatgpt_oauth_account(home, &account.name) {
+            continue;
+        }
         let provider = oauth_provider_for_account(account);
         providers.insert(provider.id.clone(), provider);
     }
@@ -247,6 +250,37 @@ pub fn set_provider_health(home: &Path, provider_id: &str, health: ProviderHealt
 mod tests {
     use super::*;
 
+    fn test_account(name: &str) -> AccountMeta {
+        AccountMeta {
+            name: name.to_string(),
+            note: None,
+            created_at: Utc::now().to_rfc3339(),
+            updated_at: Utc::now().to_rfc3339(),
+            source: None,
+            sha256_prefix: None,
+            size: None,
+            is_active: None,
+            last_usage_check_at: None,
+            usage: None,
+            subscription: None,
+            manual_subscription_override: None,
+            priority: None,
+            health: AccountHealth::Healthy,
+            health_message: None,
+            auth_tokens: Vec::new(),
+        }
+    }
+
+    fn write_account_auth(home: &Path, name: &str, value: serde_json::Value) {
+        let dir = home.join("accounts").join(name);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("auth.json"),
+            serde_json::to_string_pretty(&value).unwrap(),
+        )
+        .unwrap();
+    }
+
     #[test]
     fn public_provider_hides_api_key() {
         let provider = ProviderConfig {
@@ -263,6 +297,49 @@ mod tests {
         };
         let public = public_provider(&provider);
         assert!(public.has_secret);
+    }
+
+    #[test]
+    fn merged_providers_only_wraps_chatgpt_oauth_accounts() {
+        let home =
+            std::env::temp_dir().join(format!("codex-provider-merge-{}", uuid::Uuid::new_v4()));
+        write_account_auth(
+            &home,
+            "oauth@example.com",
+            serde_json::json!({
+                "auth_mode": "chatgpt",
+                "tokens": {
+                    "access_token": "access-token",
+                    "refresh_token": "refresh-token"
+                }
+            }),
+        );
+        write_account_auth(
+            &home,
+            "api-key@example.com",
+            serde_json::json!({
+                "auth_mode": "api_key",
+                "OPENAI_API_KEY": "sk-secret"
+            }),
+        );
+
+        let providers = merged_providers(
+            &home,
+            &[
+                test_account("oauth@example.com"),
+                test_account("api-key@example.com"),
+            ],
+        )
+        .unwrap();
+
+        assert!(providers
+            .iter()
+            .any(|provider| provider.id == "account:oauth@example.com"
+                && provider.kind == ProviderKind::ChatGptOauth));
+        assert!(!providers
+            .iter()
+            .any(|provider| provider.id == "account:api-key@example.com"));
+        let _ = std::fs::remove_dir_all(home);
     }
 
     #[test]
