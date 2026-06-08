@@ -175,6 +175,44 @@ export default function AddAccountDialog({ open, onClose }: Props) {
     onClose()
   }
 
+  const importSection = !showOverwrite && (
+    <div className="rounded-lg border border-primary/30 bg-primary-muted/40 p-3">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p className="text-xs font-semibold text-fg">导入 JSON 账号池</p>
+          <p className="text-[11px] text-fg-muted mt-1 leading-relaxed">
+            支持单账号 JSON、账号数组，以及 accounts/items/data/list 包装格式；会自动识别邮箱、订阅、备注和优先标记。
+          </p>
+        </div>
+        <button
+          onClick={() => fileInputRef.current?.click()}
+          disabled={importing}
+          className="inline-flex shrink-0 items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-semibold text-white bg-primary hover:bg-primary-hover disabled:opacity-50 transition-colors"
+        >
+          {importing ? <RefreshCw className="w-3 h-3 animate-spin" /> : <Upload className="w-3 h-3" />}
+          {importing ? '导入中' : '导入 JSON'}
+        </button>
+      </div>
+      <label className="mt-3 flex items-center justify-between gap-3 rounded-md bg-bg/70 border border-line-subtle px-3 py-2">
+        <span className="text-xs text-fg-muted">覆盖已存在账号</span>
+        <input
+          type="checkbox"
+          checked={importOverwrite}
+          onChange={(e) => setImportOverwrite(e.target.checked)}
+          className="accent-primary"
+        />
+      </label>
+      {importError && <p className="text-xs text-danger mt-2">{importError}</p>}
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="application/json,.json"
+        className="hidden"
+        onChange={(e) => void handleImportFile(e.target.files?.[0] ?? null)}
+      />
+    </div>
+  )
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center" data-component="AddAccountDialog">
       <div className="absolute inset-0 bg-black/40" onClick={handleClose} />
@@ -187,6 +225,8 @@ export default function AddAccountDialog({ open, onClose }: Props) {
         </div>
 
         <div className="p-4 space-y-3">
+          {importSection}
+
           {stage !== 'ready' && !showOverwrite && (
             <div className={cn(
               'rounded-md border p-3',
@@ -259,44 +299,6 @@ export default function AddAccountDialog({ open, onClose }: Props) {
                 />
               </div>
             </>
-          )}
-
-          {!showOverwrite && (
-            <div className="pt-3 border-t border-line-subtle">
-              <div className="flex items-start justify-between gap-3">
-                <div>
-                  <p className="text-xs font-medium text-fg">导入号池 JSON</p>
-                  <p className="text-[11px] text-fg-muted mt-1 leading-relaxed">
-                    支持单账号 JSON、账号数组，以及 accounts/items/data/list 包装格式；会自动识别邮箱、订阅、备注和优先标记。
-                  </p>
-                </div>
-                <button
-                  onClick={() => fileInputRef.current?.click()}
-                  disabled={importing}
-                  className="inline-flex shrink-0 items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium text-primary bg-primary-muted hover:bg-primary/15 disabled:opacity-50 transition-colors"
-                >
-                  {importing ? <RefreshCw className="w-3 h-3 animate-spin" /> : <Upload className="w-3 h-3" />}
-                  {importing ? '导入中' : '选择 JSON'}
-                </button>
-              </div>
-              <label className="mt-3 flex items-center justify-between gap-3 rounded-md bg-bg-elevated border border-line-subtle px-3 py-2">
-                <span className="text-xs text-fg-muted">覆盖已存在账号</span>
-                <input
-                  type="checkbox"
-                  checked={importOverwrite}
-                  onChange={(e) => setImportOverwrite(e.target.checked)}
-                  className="accent-primary"
-                />
-              </label>
-              {importError && <p className="text-xs text-danger mt-2">{importError}</p>}
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept="application/json,.json"
-                className="hidden"
-                onChange={(e) => void handleImportFile(e.target.files?.[0] ?? null)}
-              />
-            </div>
           )}
         </div>
 
