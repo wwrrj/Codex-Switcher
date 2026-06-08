@@ -376,6 +376,7 @@ pub fn set_request_provider(home: &Path, provider_id: Option<String>) -> Result<
     let mut config = load_proxy_config(home)?;
     config.routing.request_provider_id = provider_id;
     save_proxy_config(home, &config)?;
+    append_request_provider_log(home, config.routing.request_provider_id.as_deref());
     get_proxy_state(home)
 }
 
@@ -917,6 +918,16 @@ fn record_failover(
     path: &str,
     replay_safe: bool,
 ) {
+    core::append_app_log(
+        home,
+        LogLevel::Warning,
+        format!(
+            "自动故障转移：{} -> {}，原因：{}",
+            from.name,
+            to.name,
+            sanitize_message(reason)
+        ),
+    );
     append_failover(
         home,
         FailoverEvent {
@@ -931,6 +942,28 @@ fn record_failover(
             replay_safe: Some(replay_safe),
         },
     );
+}
+
+fn append_request_provider_log(home: &Path, provider_id: Option<&str>) {
+    let accounts = core::list_accounts(home).unwrap_or_default();
+    let providers = providers::merged_providers(home, &accounts).unwrap_or_default();
+    let request_provider = provider_id
+        .and_then(|id| providers.iter().find(|provider| provider.id == id))
+        .map(|provider| provider.name.clone())
+        .unwrap_or_else(|| "默认路由".to_string());
+    let config = load_proxy_config(home).unwrap_or_default();
+    let residency = config
+        .mobile_residency
+        .enabled
+        .then(|| config.mobile_residency.account_name.clone())
+        .flatten();
+    let message = match residency {
+        Some(account) => {
+            format!("当前请求出口切换为：{request_provider}，移动端驻留保持为：{account}")
+        }
+        None => format!("当前请求出口切换为：{request_provider}"),
+    };
+    core::append_app_log(home, LogLevel::Info, message);
 }
 
 fn record_request(
@@ -1878,6 +1911,10 @@ mod tests {
         assert_eq!(failovers[0].method.as_deref(), Some("POST"));
         assert_eq!(failovers[0].path.as_deref(), Some("/v1/responses"));
         assert_eq!(failovers[0].replay_safe, Some(true));
+        let logs = core::load_app_logs(&home);
+        assert!(logs.iter().any(|log| log
+            .message
+            .contains("自动故障转移：provider:bad -> provider:good")));
         stop_proxy(&home).unwrap();
         let _ = std::fs::remove_dir_all(home);
     }
@@ -1898,6 +1935,51 @@ mod tests {
             "/backend-api/conversation"
         ));
         assert!(!is_replay_safe_request(&Method::DELETE, "/v1/responses"));
+    }
+
+    #[test]
+    fn set_request_provider_records_mobile_residency_context() {
+        let home = temp_home("request-provider-log");
+        save_proxy_config(
+            &home,
+            &ProxyConfig {
+                mobile_residency: MobileResidencyConfig {
+                    enabled: true,
+                    account_name: Some("phone@example.com".to_string()),
+                    ..MobileResidencyConfig::default()
+                },
+                ..ProxyConfig::default()
+            },
+        )
+        .unwrap();
+        providers::save_provider(
+            &home,
+            ProviderConfig {
+                id: "provider:work".to_string(),
+                name: "work".to_string(),
+                kind: ProviderKind::CustomChatCompletions,
+                enabled: true,
+                base_url: "https://example.com/v1".to_string(),
+                account_name: None,
+                api_key: Some("sk-test".to_string()),
+                model_map: None,
+                include_in_failover: false,
+                health: ProviderHealth {
+                    status: ProviderHealthStatus::Healthy,
+                    ..ProviderHealth::default()
+                },
+            },
+        )
+        .unwrap();
+
+        set_request_provider(&home, Some("provider:work".to_string())).unwrap();
+
+        let logs = core::load_app_logs(&home);
+        assert!(logs
+            .iter()
+            .any(|log| log.message
+                == "当前请求出口切换为：work，移动端驻留保持为：phone@example.com"));
+        let _ = std::fs::remove_dir_all(home);
     }
 
     #[tokio::test]
