@@ -45,6 +45,16 @@ struct ProxyAppState {
     client: reqwest::Client,
 }
 
+#[derive(Clone)]
+struct StreamFailureContext {
+    home: PathBuf,
+    provider: Option<String>,
+    method: Method,
+    path: String,
+    attempts: u8,
+    started: Instant,
+}
+
 #[derive(Debug)]
 struct UpstreamFailure {
     reason: String,
@@ -828,6 +838,8 @@ async fn proxy_request(state: ProxyAppState, req: Request<Body>) -> Result<Respo
             query.as_deref(),
             &headers,
             body_bytes.clone(),
+            attempted.len() as u8,
+            started,
         )
         .await
         {
@@ -1034,6 +1046,8 @@ async fn forward_once(
     query: Option<&str>,
     headers: &HeaderMap,
     body: Bytes,
+    attempts: u8,
+    started: Instant,
 ) -> Result<Response<Body>> {
     let upstream_url = upstream_url(provider, path, query);
     let mut upstream_body = body;
@@ -1117,7 +1131,19 @@ async fn forward_once(
         return response_from_parts(status_code, headers, Body::from(body));
     }
 
-    response_from_reqwest(upstream, transform_chat_stream).await
+    response_from_reqwest(
+        upstream,
+        transform_chat_stream,
+        Some(StreamFailureContext {
+            home: state.home.clone(),
+            provider: Some(provider.name.clone()),
+            method: method.clone(),
+            path: path.to_string(),
+            attempts,
+            started,
+        }),
+    )
+    .await
 }
 
 fn provider_auth_header(home: &Path, provider: &ProviderConfig) -> Result<Option<String>> {
@@ -1191,6 +1217,7 @@ fn join_url(base: &str, path: &str, query: Option<&str>) -> String {
 async fn response_from_reqwest(
     upstream: reqwest::Response,
     transform_chat_stream: bool,
+    stream_context: Option<StreamFailureContext>,
 ) -> Result<Response<Body>> {
     let status = StatusCode::from_u16(upstream.status().as_u16())?;
     let headers = upstream.headers().clone();
@@ -1207,9 +1234,13 @@ async fn response_from_reqwest(
     }
     if is_sse {
         if transform_chat_stream {
+            let context = stream_context.clone();
             let stream = upstream
                 .bytes_stream()
-                .map_err(|error| std::io::Error::new(std::io::ErrorKind::Other, error))
+                .map_err(move |error| {
+                    record_stream_failure(context.as_ref(), &error);
+                    std::io::Error::new(std::io::ErrorKind::Other, error)
+                })
                 .scan(
                     transforms::ChatCompletionSseTransformer::default(),
                     |transformer, chunk| {
@@ -1230,9 +1261,11 @@ async fn response_from_reqwest(
                 .header("content-type", "text/event-stream")
                 .body(Body::from_stream(stream))?);
         }
-        let stream = upstream
-            .bytes_stream()
-            .map_err(|error| std::io::Error::new(std::io::ErrorKind::Other, error));
+        let context = stream_context.clone();
+        let stream = upstream.bytes_stream().map_err(move |error| {
+            record_stream_failure(context.as_ref(), &error);
+            std::io::Error::new(std::io::ErrorKind::Other, error)
+        });
         return Ok(builder.body(Body::from_stream(stream))?);
     }
     let bytes = upstream.bytes().await?;
@@ -1260,6 +1293,26 @@ fn response_from_parts(
         builder = builder.header(name.as_str(), value.as_bytes());
     }
     Ok(builder.body(body)?)
+}
+
+fn record_stream_failure(context: Option<&StreamFailureContext>, error: &reqwest::Error) {
+    let Some(context) = context else {
+        return;
+    };
+    let message = format!("SSE 流中断：{}", sanitize_message(&error.to_string()));
+    record_request(
+        &context.home,
+        context.provider.clone(),
+        &context.method,
+        &context.path,
+        None,
+        false,
+        context.attempts,
+        context.started.elapsed().as_millis(),
+        false,
+        Some(message.clone()),
+    );
+    core::append_app_log(&context.home, LogLevel::Warning, message);
 }
 
 fn response_with_status(status: StatusCode, body: String) -> Response<Body> {
@@ -1486,6 +1539,45 @@ mod tests {
                 Ok(Bytes::from_static(b"\n\n")),
                 Ok(Bytes::from_static(b"data: [DONE]\n\n")),
             ]);
+            Response::builder()
+                .status(StatusCode::OK)
+                .header("content-type", "text/event-stream")
+                .body(Body::from_stream(chunks))
+                .unwrap()
+        }
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let app = Router::new().route("/v1/chat/completions", post(handler));
+        tauri::async_runtime::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        format!("http://{}", addr)
+    }
+
+    async fn start_mock_broken_sse_upstream() -> String {
+        async fn handler(Json(_body): Json<serde_json::Value>) -> impl IntoResponse {
+            let chunks = futures_util::stream::unfold(0, |state| async move {
+                match state {
+                    0 => Some((
+                        Ok::<_, std::io::Error>(Bytes::from_static(
+                            b"data: {\"choices\":[{\"delta\":{\"content\":\"partial\"}}]}\n\n",
+                        )),
+                        1,
+                    )),
+                    1 => {
+                        tokio::time::sleep(Duration::from_millis(50)).await;
+                        Some((
+                            Err(std::io::Error::new(
+                                std::io::ErrorKind::ConnectionReset,
+                                "mock upstream stream reset",
+                            )),
+                            2,
+                        ))
+                    }
+                    _ => None,
+                }
+            });
             Response::builder()
                 .status(StatusCode::OK)
                 .header("content-type", "text/event-stream")
@@ -1865,6 +1957,72 @@ mod tests {
         assert!(body.contains("response.output_text.delta"));
         assert!(body.contains(r#""delta":"hello""#));
         assert!(body.contains("response.completed"));
+        stop_proxy(&home).unwrap();
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    #[tokio::test]
+    async fn proxy_records_broken_sse_stream_after_headers() {
+        let _guard = TEST_PROXY_MUTEX.lock().await;
+        let home = temp_home("broken-sse");
+        let upstream = start_mock_broken_sse_upstream().await;
+        let port = available_port().await;
+        save_proxy_config(
+            &home,
+            &ProxyConfig {
+                enabled: true,
+                port,
+                routing: RoutingPolicy {
+                    request_provider_id: Some("provider:broken-sse".to_string()),
+                    allow_third_party_failover: true,
+                    ..RoutingPolicy::default()
+                },
+                ..ProxyConfig::default()
+            },
+        )
+        .unwrap();
+        providers::save_provider(
+            &home,
+            ProviderConfig {
+                id: "provider:broken-sse".to_string(),
+                name: "Broken SSE".to_string(),
+                kind: ProviderKind::CustomChatCompletions,
+                enabled: true,
+                base_url: format!("{}/v1", upstream),
+                account_name: None,
+                api_key: Some("sk-test".to_string()),
+                model_map: None,
+                include_in_failover: true,
+                health: ProviderHealth {
+                    status: ProviderHealthStatus::Healthy,
+                    ..ProviderHealth::default()
+                },
+            },
+        )
+        .unwrap();
+
+        let state = start_proxy(home.clone()).await.unwrap();
+        let response = reqwest::Client::new()
+            .post(format!("{}/v1/responses", state.listen_url.unwrap()))
+            .json(&serde_json::json!({ "model": "gpt-4.1", "input": "hello", "stream": true }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), reqwest::StatusCode::OK);
+        assert!(response.text().await.is_err());
+
+        let requests = load_requests(&home);
+        assert!(requests.iter().any(|event| {
+            !event.success
+                && event.provider.as_deref() == Some("Broken SSE")
+                && event.path == "/v1/responses"
+                && event
+                    .error
+                    .as_deref()
+                    .is_some_and(|error| error.contains("SSE 流中断"))
+        }));
+        let logs = core::load_app_logs(&home);
+        assert!(logs.iter().any(|log| log.message.contains("SSE 流中断")));
         stop_proxy(&home).unwrap();
         let _ = std::fs::remove_dir_all(home);
     }
