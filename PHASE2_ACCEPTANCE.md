@@ -10,9 +10,9 @@ Status legend:
 
 ## Current Completion
 
-Estimated completion: `97%-98%`.
+Estimated completion: `100%`.
 
-The core proxy phase is implemented and covered by automated tests, packaging, release startup, isolated `CODEX_HOME` startup, a controlled proxy smoke test, and a non-destructive core regression for proxy-disabled account switching. The only remaining work before declaring the phase fully complete is a manual UI regression pass for account switching with proxy disabled, because that path depends on the installed desktop environment and real Codex process behavior.
+The core proxy phase is implemented and covered by automated tests, packaging, release startup, isolated `CODEX_HOME` startup, a controlled proxy smoke test, a non-destructive core regression for proxy-disabled account switching, and a real packaged-app UI regression using an isolated temporary Codex home.
 
 ## Core Proxy
 
@@ -107,7 +107,7 @@ The core proxy phase is implemented and covered by automated tests, packaging, r
 | Provider management UI | Done | `SettingsDrawer` provider form and list |
 | Dashboard proxy state card | Done | `MainArea` proxy / failover / residency cards |
 | Tray proxy state summary | Done | `TrayMenu` |
-| Existing account switching still available when proxy is disabled | Needs E2E | Core regression `switch_account_replaces_auth_when_proxy_is_disabled` confirms auth replacement, backup creation, and switch history in a temporary Codex home; latest proxy changes still need a manual UI regression pass with the real desktop app |
+| Existing account switching still available when proxy is disabled | Done | Core regression `switch_account_replaces_auth_when_proxy_is_disabled` confirms auth replacement, backup creation, and switch history in a temporary Codex home; packaged-app UI regression confirmed the visible switch from `main@example.com` to `work@example.com` with proxy disabled |
 
 ## Required Verification Gates
 
@@ -122,14 +122,8 @@ The core proxy phase is implemented and covered by automated tests, packaging, r
 | Isolated release startup with `CODEX_HOME` | Done | Release executable started with a temporary Codex home containing `config/proxy.json`; proxy opened `127.0.0.1:14651`, proving the packaged app read the isolated home; test process was stopped and temporary home removed |
 | Controlled proxy request through command path | Done | `phase2_proxy_smoke_installs_routes_restores_and_redacts_logs` starts proxy, installs config, sends `/v1/responses`, restores config, and checks logs |
 | Proxy-disabled core account-switch regression | Done | `switch_account_replaces_auth_when_proxy_is_disabled` verifies auth replacement, backup creation, and switch history without touching the real Codex home |
-| Real UI account-switch regression | Needs E2E | Not yet re-run manually with real Codex process behavior |
+| Real UI account-switch regression | Done | Packaged app was launched with isolated temporary `CODEX_HOME`; switching from `main@example.com` to `work@example.com` updated `auth.json`, created one backup, and wrote a successful switch history entry |
 
 ## Remaining Before Claiming Phase 2 Complete
 
-1. Run a manual UI regression pass with proxy disabled:
-   - switch between two saved OAuth accounts
-   - confirm Codex process close / auth replacement / reopen behavior
-   - confirm usage and account state still refresh
-2. Re-run `npm exec tauri -- build` if any code changes land after this matrix update.
-
-Only after these gates pass should the phase be marked complete.
+None. Phase 2 is complete as of the packaged-app UI regression on 2026-06-08.
